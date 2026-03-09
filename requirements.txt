@@ -1,0 +1,7 @@
+streamlit
+openai
+pydantic
+langchain-text-splitters
+crawl4ai
+python-docx
+duckduckgo-search
