@@ -6,6 +6,7 @@ import os
 import datetime
 import subprocess
 import concurrent.futures
+import platform
 from typing import List
 
 # ================= 0. 核心库引用 =================
@@ -14,8 +15,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import OpenAI  
 
 # ================= 1. 核心网络配置 =================
-# 在 Streamlit Cloud 上运行时，其实不需要本地代理
-# 为了兼容本地和云端，我们使用 try-except 忽略代理报错
 os.environ["http_proxy"] = "http://127.0.0.1:7890"
 os.environ["https_proxy"] = "http://127.0.0.1:7890"
 
@@ -34,7 +33,6 @@ if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 st.set_page_config(page_title="DeepSeek 科技探员", page_icon="🐳", layout="wide")
-
 
 # ================= 3. 定义结构化数据 =================
 class NewsItem(BaseModel):
@@ -104,6 +102,22 @@ class EnterpriseDeepSeekDriver:
 
 # ================= 5. 业务逻辑函数 =================
 
+# 🔴 修复 1：跨平台自动检测与安装浏览器内核 (解决云端死循环下载导致网页崩溃的元凶)
+def check_and_install_playwright():
+    if platform.system() == "Windows":
+        pw_path = os.path.join(os.path.expanduser("~"), "AppData", "Local", "ms-playwright")
+    else:
+        # Linux / Streamlit Cloud 环境下的路径
+        pw_path = os.path.join(os.path.expanduser("~"), ".cache", "ms-playwright")
+        
+    if not os.path.exists(pw_path):
+        st.info("☁️ 首次在云端运行，正在初始化浏览器内核 (仅需约 1-2 分钟，请稍候)...")
+        try:
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+            st.success("✅ 浏览器内核初始化成功！")
+        except Exception as e:
+            st.error(f"❌ 内核安装失败，请检查 requirements.txt 是否配置正确: {e}")
+
 def search_web(query, sites_text, timelimit, max_results=15):
     sites = [s.strip() for s in sites_text.split('\n') if s.strip()]
     current_year = datetime.date.today().year
@@ -113,23 +127,15 @@ def search_web(query, sites_text, timelimit, max_results=15):
 
     results = []
     try:
-        # 在云端环境如果 DDGS 报错（通常是被墙或限流），捕获异常防止崩溃
         with DDGS(proxies=None) as ddgs: 
             ddgs_gen = ddgs.text(final_query, max_results=max_results, timelimit=timelimit)
             for r in ddgs_gen: results.append(r)
-    except Exception as e:
-        pass # 失败静默，交给外部判断
-
+    except Exception:
+        pass 
     return results[:max_results]
 
 
-# 🔴 UI 剥离修复：不再将 Streamlit 的 status 对象传入异步函数
 async def crawl_urls_concurrently(urls):
-    if not os.path.exists(os.path.join(os.path.expanduser("~"), "AppData", "Local", "ms-playwright")):
-        try:
-            subprocess.run(["playwright", "install", "chromium"], check=True)
-        except: pass
-
     full_content = ""
     valid_count = 0
 
@@ -149,7 +155,6 @@ async def crawl_urls_concurrently(urls):
     return full_content, valid_count
 
 
-# 🔴 UI 剥离修复：去除线程内部的 UI 更新
 def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
     if not full_text or len(full_text) < 100:
         return []
@@ -169,7 +174,7 @@ def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
         
         【生死级过滤红线（违反直接淘汰）】：
         1. 核心主角原则：【{topic}】必须是该新闻的**绝对主角**或核心参与方。如果只是文章中顺带提及（例如：“像{topic}一样”、“作为对比，{topic}之前曾……”、“{topic}的竞争对手某某某”），**绝对不要提取！宁可返回空列表！**
-        2. 严格时间判定：用户要求的新闻时间范围是：【{time_opt}】。请仔细研判文本中的时间线索（如日期、昨天、几小时前）。如果明显是发生在 {time_opt} 之前的旧闻，或者是网页底部的“历史热文推荐”，**绝对不要提取！**
+        2. 严格时间判定：用户要求的新闻时间范围是：【{time_opt}】。请仔细研判文本中的时间线索。如果明显是发生在 {time_opt} 之前的旧闻，或者是网页底部的“历史热文推荐”，**绝对不要提取！**
         
         如果文本中没有完全符合上述两点红线的内容，必须返回 `{{"news": []}}`。
         如果符合，提取并翻译为专业的中文。
@@ -276,58 +281,68 @@ with st.sidebar:
     sites = st.text_area("重点搜索源 (每行一个)", default_sites, height=150)
     file_name = st.text_input("生成文件名", f"深度研报_{datetime.date.today()}")
 
-st.title("🐳 DeepSeek 科技情报探员 (云端安全版)")
+st.title("🐳 DeepSeek 科技情报探员 (云端铁甲版)")
 query_input = st.text_input("输入主题 (用 \\ 隔开，如：苹果 \\ OpenAI)", "谷歌 \\ 微软")
 btn = st.button("生成深度研报", type="primary")
 
+# 🔴 修复 2：去掉脆弱的 st.status，采用稳如泰山的流式打印输出
 if btn:
     if not api_key:
         st.error("❌ 请先在左侧边栏填入 DeepSeek API Key！")
     elif not query_input:
         st.warning("请输入关键词")
     else:
+        # 第一步：安全校验浏览器内核
+        check_and_install_playwright()
+        
         topics = [t.strip() for t in query_input.split('\\') if t.strip()]
         all_data = []
 
-        status = st.status("🚀 系统启动，情报网已撒出...", expanded=True)
+        st.info("🚀 系统启动，情报网已撒出...")
         ai = EnterpriseDeepSeekDriver(api_key, model_id)
         current_date_str = datetime.date.today().strftime("%Y年%m月%d日")
 
         for topic in topics:
-            status.write(f"🔵 **正在追踪主题: {topic}**")
+            st.markdown(f"### 🔵 正在追踪主题: **{topic}**")
 
             links = search_web(topic, sites, time_limit)
             if not links:
-                status.warning(f"⚠️ {topic} 无搜索结果 (海外搜索 API 在云端可能受限，请放宽条件)")
+                st.warning(f"⚠️ {topic} 无搜索结果 (海外搜索 API 在云端可能受限，请放宽条件)")
                 continue
 
-            status.write(f"⚡ 启动并发抓取: {len(links)} 个深度源页面...")
+            st.write(f"⚡ 已搜寻到 {len(links)} 个有效线索，正在启动并发抓取...")
             urls = [r['href'] for r in links]
             
-            # 🔴 UI 彻底安全化：不在里面更新任何进度
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # 使用安全的 asyncio 执行方式
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
             full_text_data, valid_count = loop.run_until_complete(crawl_urls_concurrently(urls))
-            loop.close()
-            status.write(f"✅ 抓取完成，有效提纯页面: {valid_count}/{len(urls)}")
+            
+            st.success(f"✅ 抓取并提纯完成，成功提取 {valid_count}/{len(urls)} 个网页的正文。")
 
             if full_text_data:
-                # 🔴 UI 彻底安全化：不在多线程里写任何东西到前端
-                status.write(f"🧠 {model_id} 正在疯狂研读与去噪提炼 (请耐心等待大约 10-30 秒)...")
+                st.info(f"🧠 DeepSeek 正在极速研读文本并交叉验证 (预计耗时 10~30 秒，请勿刷新网页)...")
                 final_news_list = map_reduce_analysis(ai, topic, full_text_data, current_date_str, time_opt)
 
                 if final_news_list:
                     all_data.append({"topic": topic, "data": final_news_list})
-                    status.write(f"✅ {topic} 分析完毕！严格提炼出 {len(final_news_list)} 条核心情报。")
+                    st.success(f"🎉 【{topic}】情报分析完毕！严选出 {len(final_news_list)} 条核心动态。")
                 else:
-                    status.warning(f"⚠️ {topic} 在选定时间内，未发现其作为核心主角的重大情报。")
+                    st.warning(f"⚠️ 经过深层排查，未发现在指定时间内与【{topic}】紧密相关的高价值情报。")
             else:
-                status.error(f"❌ {topic} 抓取内容为空")
+                st.error(f"❌ {topic} 抓取的网页内容无效或被反爬拦截。")
+            
+            st.divider()
 
         if all_data:
             path = generate_word(all_data, file_name, model_id)
-            status.update(label="研报生成完毕！", state="complete")
+            st.balloons()
+            st.success("✅ 研报全部生成完毕！")
             with open(path, "rb") as f:
-                st.download_button("📥 立即下载中文深度研报 (Word)", f, file_name=path)
+                st.download_button("📥 立即下载中文深度研报 (Word)", f, file_name=path, type="primary")
         else:
-            status.error("❌ 任务结束。未发现符合严格条件的情报，未能生成研报。")
+            st.error("❌ 任务结束。未发现符合严格条件的情报，未能生成研报。")
