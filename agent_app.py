@@ -15,8 +15,18 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import OpenAI  
 
 # ================= 1. 核心网络配置 =================
-os.environ["http_proxy"] = "http://127.0.0.1:7890"
-os.environ["https_proxy"] = "http://127.0.0.1:7890"
+# 🔴 致命修复：智能代理识别。
+# 如果在你自己的 Windows 电脑上跑，自动连本地代理；
+# 如果在 Streamlit 云端 Linux 服务器上跑，自动直连，防止网络死锁！
+if platform.system() == "Windows":
+    os.environ["http_proxy"] = "http://127.0.0.1:7890"
+    os.environ["https_proxy"] = "http://127.0.0.1:7890"
+else:
+    # 在云端彻底清除代理设置，防止爬虫撞墙
+    os.environ.pop("http_proxy", None)
+    os.environ.pop("https_proxy", None)
+    os.environ.pop("HTTP_PROXY", None)
+    os.environ.pop("HTTPS_PROXY", None)
 
 # ================= 2. 爬虫与文档库引用 =================
 try:
@@ -89,28 +99,38 @@ def check_and_install_playwright():
     except Exception:
         return False
 
+# 🔴 修复：搜索引擎终极越狱机制
 def search_web(query, sites_text, timelimit, max_results=15):
     sites = [s.strip() for s in sites_text.split('\n') if s.strip()]
-    current_year = datetime.date.today().year
-    final_query = f"{query} {current_year} (news OR 最新 OR 商业)"
-    if sites: final_query += f" ({' OR '.join([f'site:{s}' for s in sites])})"
+    
+    # 移除了硬编码的中文词汇，防止在英文网站搜不出结果
+    final_query = query
+    if sites: 
+        final_query += f" ({' OR '.join([f'site:{s}' for s in sites])})"
     
     results = []
-    # 🔴 搜索引擎越狱机制：如果云端封锁了默认API，自动切换到备用底层网页通道
-    try:
-        with DDGS(proxies=None) as ddgs: 
-            results = list(ddgs.text(final_query, max_results=max_results, timelimit=timelimit))
-    except Exception: 
-        pass 
-        
-    if not results:
+    # 轮询3种底层接口，无视云端屏蔽
+    backends_to_try = ["api", "html", "lite"]
+    
+    for backend in backends_to_try:
         try:
-            with DDGS(proxies=None) as ddgs:
-                results = list(ddgs.text(final_query, max_results=max_results, timelimit=timelimit, backend="lite"))
+            with DDGS() as ddgs: 
+                res = list(ddgs.text(final_query, max_results=max_results, timelimit=timelimit, backend=backend))
+                if res: return res[:max_results]
         except Exception:
-            pass
+            continue 
             
-    return results[:max_results]
+    # 终极保底：如果带时间限制搜不到，去掉时间限制强搜
+    if timelimit is not None:
+        for backend in backends_to_try:
+            try:
+                with DDGS() as ddgs: 
+                    res = list(ddgs.text(final_query, max_results=max_results, timelimit=None, backend=backend))
+                    if res: return res[:max_results]
+            except Exception:
+                continue
+                
+    return []
 
 async def crawl_urls_concurrently(urls):
     full_content = ""
@@ -151,7 +171,6 @@ def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
         """
         return ai_driver.analyze_structural(map_prompt, NewsReport)
 
-    # 🔴 注意：这里不使用任何 UI 组件，绝对安全
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         for future in concurrent.futures.as_completed([executor.submit(process_single_doc, d) for d in docs]):
             res = future.result()
@@ -212,11 +231,14 @@ with st.sidebar:
     st.divider()
     time_opt = st.selectbox("时间范围", ["过去 24 小时", "过去 1 周", "过去 1 个月", "不限时间"], index=0)
     time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m", "不限时间": None}
+    
+    # 🔴 在输入框里提示用户：外网请用英文名搜索
+    st.markdown("**搜外媒请用英文名 (如 Google、Apple)**")
     sites = st.text_area("重点搜索源", "techcrunch.com\nbloomberg.com/technology\nithome.com\ntheverge.com\nreadhub.cn\n36kr.com", height=130)
     file_name = st.text_input("文件名", f"深度研报_{datetime.date.today()}")
 
 st.title("🐳 企业情报探员 (云端突破版)")
-query_input = st.text_input("输入主题 (用 \\ 隔开)", "谷歌 \\ 微软")
+query_input = st.text_input("输入主题 (用 \\ 隔开，外媒源建议用英文如：Google \\ Apple)", "Google \\ 微软")
 btn = st.button("🚀 开始生成研报", type="primary")
 
 if btn:
@@ -225,7 +247,6 @@ if btn:
     elif not query_input:
         st.warning("请输入关键词！")
     else:
-        # 第一关：安全拉起浏览器环境
         check_and_install_playwright()
         
         topics = [t.strip() for t in query_input.split('\\') if t.strip()]
@@ -233,9 +254,8 @@ if btn:
         ai = EnterpriseDeepSeekDriver(api_key, model_id)
         current_date_str = datetime.date.today().strftime("%Y年%m月%d日")
 
-        st.info("🚀 探员已出发，系统运转中...")
+        st.info("🚀 探员已出发，系统网络直连云端...")
 
-        # 🔴 恢复可见的安全进度 UI，让你清楚知道卡在哪一步
         for topic in topics:
             st.markdown(f"#### 🔵 追踪目标: 【{topic}】")
             
@@ -243,7 +263,7 @@ if btn:
                 links = search_web(topic, sites, time_limit_dict[time_opt])
             
             if not links: 
-                st.warning(f"⚠️ {topic}：在选定时间内未搜寻到任何有效网址（云端限制或条件太严苛）。")
+                st.warning(f"⚠️ {topic}：未搜寻到任何有效网址。建议：更换为英文名(如用 Google 代替 谷歌)，或放宽时间限制。")
                 continue
                 
             st.write(f"🔍 成功获取 {len(links)} 个高度相关的网址，启动爬虫...")
@@ -267,7 +287,6 @@ if btn:
             
             st.divider()
 
-        # 任务结束统一发奖
         if all_data:
             path = generate_word(all_data, file_name, model_id)
             st.balloons()
