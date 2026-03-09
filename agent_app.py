@@ -79,17 +79,14 @@ class EnterpriseDeepSeekDriver:
 
 # ================= 5. 核心业务函数 =================
 
-# 🔴 魔法防御 1：使用缓存锁，确保全局只执行一次！绝不会导致网页死循环！
 @st.cache_resource(show_spinner="☁️ 首次启动：正在云端配置无头浏览器内核 (约需1-2分钟)...")
 def check_and_install_playwright():
     try:
-        # 安装浏览器内核
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True, capture_output=True)
-        # 🔴 终极杀招：强制安装 Linux 缺失的所有系统级依赖！
+        os.system(f"{sys.executable} -m playwright install chromium")
         if platform.system() != "Windows":
-            subprocess.run([sys.executable, "-m", "playwright", "install-deps", "chromium"], check=True, capture_output=True)
+            os.system(f"{sys.executable} -m playwright install-deps chromium")
         return True
-    except Exception as e:
+    except Exception:
         return False
 
 def search_web(query, sites_text, timelimit, max_results=15):
@@ -119,6 +116,15 @@ async def crawl_urls_concurrently(urls):
                 if len(markdown_text) > 200:
                     full_content += f"\n\n=== SOURCE START: {urls[i]} ===\n{markdown_text[:15000]}\n=== SOURCE END ===\n"
     return full_content, valid_count
+
+# 🔴 异步隔离舱：彻底解决 Streamlit 与 asyncio 的八字不合
+def safe_run_async_crawler(urls):
+    new_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(new_loop)
+    try:
+        return new_loop.run_until_complete(crawl_urls_concurrently(urls))
+    finally:
+        new_loop.close()
 
 def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
     if not full_text or len(full_text) < 100: return []
@@ -199,19 +205,16 @@ with st.sidebar:
     sites = st.text_area("重点搜索源", "techcrunch.com\nbloomberg.com/technology\nithome.com\ntheverge.com\nreadhub.cn\n36kr.com", height=130)
     file_name = st.text_input("文件名", f"深度研报_{datetime.date.today()}")
 
-st.title("🐳 企业情报探员 (云端铁甲版)")
+st.title("🐳 企业情报探员 (最终除魔版)")
 query_input = st.text_input("输入主题 (用 \\ 隔开)", "谷歌 \\ 微软")
 btn = st.button("🚀 开始生成研报", type="primary")
 
-# 🔴 魔法防御 2：彻底抛弃所有会导致前端崩溃的局部动态刷新！
-# 用一个固定的 spinner 锁死 UI，后台尽情跑，跑完再展示结果。
 if btn:
     if not api_key:
         st.error("❌ 请填入 API Key！")
     elif not query_input:
         st.warning("请输入关键词！")
     else:
-        # 第一关：安全拉起浏览器环境 (只在第一次运行时触发)
         check_and_install_playwright()
         
         topics = [t.strip() for t in query_input.split('\\') if t.strip()]
@@ -219,24 +222,21 @@ if btn:
         ai = EnterpriseDeepSeekDriver(api_key, model_id)
         current_date_str = datetime.date.today().strftime("%Y年%m月%d日")
 
-        # 将所有的处理逻辑包裹在一个安全的大加载圈里
         with st.spinner("🕵️‍♂️ 探员正在全网搜寻、抓取、并利用 DeepSeek 交叉验证情报，请勿刷新网页（预计需 1-3 分钟）..."):
             for topic in topics:
                 links = search_web(topic, sites, time_limit_dict[time_opt])
                 if not links: continue
 
                 urls = [r['href'] for r in links]
-                try: loop = asyncio.get_event_loop()
-                except RuntimeError: loop = asyncio.new_event_loop()
                 
-                full_text_data, valid_count = loop.run_until_complete(crawl_urls_concurrently(urls))
+                # 调用绝对安全的异步隔离舱
+                full_text_data, valid_count = safe_run_async_crawler(urls)
 
                 if full_text_data:
                     final_news_list = map_reduce_analysis(ai, topic, full_text_data, current_date_str, time_opt)
                     if final_news_list:
                         all_data.append({"topic": topic, "data": final_news_list})
 
-        # 任务全部结束，脱离 spinner，安全地把结果打印在网页上
         if all_data:
             path = generate_word(all_data, file_name, model_id)
             st.balloons()
