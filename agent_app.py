@@ -82,9 +82,9 @@ class EnterpriseDeepSeekDriver:
 @st.cache_resource(show_spinner="☁️ 首次启动：正在云端配置无头浏览器内核 (约需1-2分钟)...")
 def check_and_install_playwright():
     try:
-        os.system(f"{sys.executable} -m playwright install chromium")
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True, capture_output=True)
         if platform.system() != "Windows":
-            os.system(f"{sys.executable} -m playwright install-deps chromium")
+            subprocess.run([sys.executable, "-m", "playwright", "install-deps", "chromium"], check=True, capture_output=True)
         return True
     except Exception:
         return False
@@ -94,12 +94,22 @@ def search_web(query, sites_text, timelimit, max_results=15):
     current_year = datetime.date.today().year
     final_query = f"{query} {current_year} (news OR 最新 OR 商业)"
     if sites: final_query += f" ({' OR '.join([f'site:{s}' for s in sites])})"
+    
     results = []
+    # 🔴 搜索引擎越狱机制：如果云端封锁了默认API，自动切换到备用底层网页通道
     try:
         with DDGS(proxies=None) as ddgs: 
-            for r in ddgs.text(final_query, max_results=max_results, timelimit=timelimit):
-                results.append(r)
-    except Exception: pass 
+            results = list(ddgs.text(final_query, max_results=max_results, timelimit=timelimit))
+    except Exception: 
+        pass 
+        
+    if not results:
+        try:
+            with DDGS(proxies=None) as ddgs:
+                results = list(ddgs.text(final_query, max_results=max_results, timelimit=timelimit, backend="lite"))
+        except Exception:
+            pass
+            
     return results[:max_results]
 
 async def crawl_urls_concurrently(urls):
@@ -113,11 +123,10 @@ async def crawl_urls_concurrently(urls):
             if res.success:
                 valid_count += 1
                 markdown_text = res.fit_markdown if hasattr(res, 'fit_markdown') and res.fit_markdown else res.markdown
-                if len(markdown_text) > 200:
+                if markdown_text and len(markdown_text) > 200:
                     full_content += f"\n\n=== SOURCE START: {urls[i]} ===\n{markdown_text[:15000]}\n=== SOURCE END ===\n"
     return full_content, valid_count
 
-# 🔴 异步隔离舱：彻底解决 Streamlit 与 asyncio 的八字不合
 def safe_run_async_crawler(urls):
     new_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(new_loop)
@@ -136,12 +145,13 @@ def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
         今天是 {current_date}。从以下文本提取关于【{topic}】的新闻情报。
         生死红线：
         1. 【{topic}】必须是绝对主角，顺带提及的直接丢弃！
-        2. 严格限制在【{time_opt}】内发生，旧闻直接丢弃！
+        2. 严格限制在【{time_opt}】内发生，明显的旧闻直接丢弃！
         无符合条件的内容必须返回 `{{"news": []}}`。
         文本：{doc.page_content}
         """
         return ai_driver.analyze_structural(map_prompt, NewsReport)
 
+    # 🔴 注意：这里不使用任何 UI 组件，绝对安全
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         for future in concurrent.futures.as_completed([executor.submit(process_single_doc, d) for d in docs]):
             res = future.result()
@@ -205,7 +215,7 @@ with st.sidebar:
     sites = st.text_area("重点搜索源", "techcrunch.com\nbloomberg.com/technology\nithome.com\ntheverge.com\nreadhub.cn\n36kr.com", height=130)
     file_name = st.text_input("文件名", f"深度研报_{datetime.date.today()}")
 
-st.title("🐳 企业情报探员 (最终除魔版)")
+st.title("🐳 企业情报探员 (云端突破版)")
 query_input = st.text_input("输入主题 (用 \\ 隔开)", "谷歌 \\ 微软")
 btn = st.button("🚀 开始生成研报", type="primary")
 
@@ -215,6 +225,7 @@ if btn:
     elif not query_input:
         st.warning("请输入关键词！")
     else:
+        # 第一关：安全拉起浏览器环境
         check_and_install_playwright()
         
         topics = [t.strip() for t in query_input.split('\\') if t.strip()]
@@ -222,26 +233,46 @@ if btn:
         ai = EnterpriseDeepSeekDriver(api_key, model_id)
         current_date_str = datetime.date.today().strftime("%Y年%m月%d日")
 
-        with st.spinner("🕵️‍♂️ 探员正在全网搜寻、抓取、并利用 DeepSeek 交叉验证情报，请勿刷新网页（预计需 1-3 分钟）..."):
-            for topic in topics:
+        st.info("🚀 探员已出发，系统运转中...")
+
+        # 🔴 恢复可见的安全进度 UI，让你清楚知道卡在哪一步
+        for topic in topics:
+            st.markdown(f"#### 🔵 追踪目标: 【{topic}】")
+            
+            with st.spinner(f"正在全网搜寻关于【{topic}】的最新线索..."):
                 links = search_web(topic, sites, time_limit_dict[time_opt])
-                if not links: continue
-
-                urls = [r['href'] for r in links]
+            
+            if not links: 
+                st.warning(f"⚠️ {topic}：在选定时间内未搜寻到任何有效网址（云端限制或条件太严苛）。")
+                continue
                 
-                # 调用绝对安全的异步隔离舱
-                full_text_data, valid_count = safe_run_async_crawler(urls)
+            st.write(f"🔍 成功获取 {len(links)} 个高度相关的网址，启动爬虫...")
 
-                if full_text_data:
+            with st.spinner(f"正在并发抓取并提纯这 {len(links)} 个网页的正文..."):
+                full_text_data, valid_count = safe_run_async_crawler(urls=[r['href'] for r in links])
+
+            if full_text_data:
+                st.write(f"🧠 成功抓取 {valid_count} 个网页。DeepSeek 正在执行精密分析（约耗时10-30秒，请勿刷新）...")
+                
+                with st.spinner("AI 正在提炼精华..."):
                     final_news_list = map_reduce_analysis(ai, topic, full_text_data, current_date_str, time_opt)
-                    if final_news_list:
-                        all_data.append({"topic": topic, "data": final_news_list})
+                
+                if final_news_list:
+                    all_data.append({"topic": topic, "data": final_news_list})
+                    st.success(f"✅ 【{topic}】分析完毕！已为您锁定 {len(final_news_list)} 条高能商业情报。")
+                else:
+                    st.warning(f"⚠️ 【{topic}】的内容经 AI 过滤后，均未通过您的“生死红线”标准。")
+            else:
+                st.error(f"❌ 网页抓取失败或正文均为空。")
+            
+            st.divider()
 
+        # 任务结束统一发奖
         if all_data:
             path = generate_word(all_data, file_name, model_id)
             st.balloons()
-            st.success(f"✅ 研报生成完毕！共追踪了 {len(topics)} 个主题，提取了海量高价值情报。")
+            st.success("🎉 全链条任务执行完毕！")
             with open(path, "rb") as f:
                 st.download_button("📥 立即下载中文深度研报 (Word)", f, file_name=path, type="primary")
         else:
-            st.error("❌ 任务结束。未发现符合严格条件的情报，请尝试放宽【时间范围】或更换关键词。")
+            st.error("❌ 任务结束。本次搜寻未发现符合极端严格条件的情报，请尝试放宽【时间范围】再试一次。")
