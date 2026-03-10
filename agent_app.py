@@ -8,7 +8,6 @@ import subprocess
 import concurrent.futures
 import platform
 import urllib.request
-import urllib.parse
 import difflib
 from typing import List
 
@@ -29,8 +28,6 @@ else:
 
 # ================= 2. 爬虫、文档与PPT排版库引用 =================
 from crawl4ai import AsyncWebCrawler
-
-# 🔴 关键修复：把 Word 和 PPT 的颜色/字体工具严格隔离，防止张冠李戴！
 from docx import Document
 from docx.shared import RGBColor as DocxRGBColor, Pt as DocxPt
 from docx.oxml.ns import qn
@@ -44,6 +41,12 @@ if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 st.set_page_config(page_title="DeepSeek 科技探员", page_icon="🐳", layout="wide")
+
+# 🔴 核心修复 1：初始化云端记忆体，防止下载时界面刷新丢失数据！
+if "report_ready" not in st.session_state:
+    st.session_state.report_ready = False
+    st.session_state.word_path = ""
+    st.session_state.ppt_path = ""
 
 # ================= 3. 定义结构化数据 =================
 class NewsItem(BaseModel):
@@ -90,7 +93,7 @@ class EnterpriseDeepSeekDriver:
 
 # ================= 5. 核心业务函数 =================
 
-@st.cache_resource(show_spinner="☁️ 首次启动：正在云端配置无头浏览器内核 (约需1-2分钟)...")
+@st.cache_resource(show_spinner="☁️ 首次启动：正在云端配置无头浏览器...")
 def check_and_install_playwright():
     try:
         subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True, capture_output=True)
@@ -103,7 +106,6 @@ def check_and_install_playwright():
 def search_web(query, sites_text, timelimit, max_results=10, tavily_key=""):
     if not tavily_key: return []
     sites = [s.strip() for s in sites_text.split('\n') if s.strip()]
-    
     try:
         url = "https://api.tavily.com/search"
         payload = {
@@ -114,7 +116,6 @@ def search_web(query, sites_text, timelimit, max_results=10, tavily_key=""):
             "max_results": max_results
         }
         if sites: payload["include_domains"] = sites
-        
         if timelimit == "d": payload["days"] = 2 
         elif timelimit == "w": payload["days"] = 7
         elif timelimit == "m": payload["days"] = 30
@@ -122,11 +123,9 @@ def search_web(query, sites_text, timelimit, max_results=10, tavily_key=""):
         data = json.dumps(payload).encode('utf-8')
         req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
         resp = json.loads(urllib.request.urlopen(req, timeout=15).read().decode('utf-8'))
-        
         results = [{'href': r['url']} for r in resp.get('results', [])]
         return results
-    except Exception as e:
-        print(f"Tavily Search Failed: {e}")
+    except Exception:
         return []
 
 async def crawl_urls_concurrently(urls):
@@ -194,7 +193,6 @@ def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
     final_report = ai_driver.analyze_structural(reduce_prompt, NewsReport)
     return final_report.news if final_report else []
 
-# 🔴 Word 文档华丽排版手术
 def generate_word(data, filename, model_name):
     doc = Document()
     normal_style = doc.styles['Normal']
@@ -246,7 +244,7 @@ def generate_word(data, filename, model_name):
     doc.save(path)
     return path
 
-# 🔴 PPT 极速原生生成器
+# 🔴 核心修复 2：高级定制级 PPT 渲染引擎
 def generate_ppt(data, filename, model_name):
     prs = Presentation()
     
@@ -267,23 +265,41 @@ def generate_ppt(data, filename, model_name):
                 content_layout = prs.slide_layouts[1] 
                 slide = prs.slides.add_slide(content_layout)
                 
+                # 标题设定（缩小字号防止溢出）
                 title_shape = slide.shapes.title
                 title_shape.text = news.title
-                title_shape.text_frame.paragraphs[0].font.size = PptxPt(28)
+                title_shape.text_frame.paragraphs[0].font.size = PptxPt(24)
                 
+                # 正文设定
                 body_shape = slide.shapes.placeholders[1]
                 tf = body_shape.text_frame
-                tf.clear() 
+                tf.clear() # 清空默认的丑陋占位符
+                tf.word_wrap = True # ✨ 魔法开关：强制文本在文本框内自动换行！
                 
-                p_meta = tf.add_paragraph()
+                # 第一行：元数据信息
+                p_meta = tf.paragraphs[0]
                 p_meta.text = f"📌 来源: {news.source}  |  🕒 {news.date_check}  |  🔥 热度: {'⭐'*news.importance}"
-                p_meta.font.size = PptxPt(14)
-                # 🔴 关键修复：使用 PPT 专用的 RGBColor 刷子
+                p_meta.font.size = PptxPt(12) # 字号调小
                 p_meta.font.color.rgb = PptxRGBColor(128, 128, 128)
                 
-                p_summary = tf.add_paragraph()
-                p_summary.text = f"\n{news.summary}"
-                p_summary.font.size = PptxPt(16)
+                # 换行留白
+                tf.add_paragraph().text = ""
+                
+                # 按行解析 AI 吐出的结构化文本，进行智能排版
+                lines = news.summary.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line: continue
+                    
+                    p = tf.add_paragraph()
+                    p.text = line
+                    p.font.size = PptxPt(14) # 正文字号缩小为 14磅，极度舒适
+                    p.space_after = PptxPt(6) # 段落间距
+                    
+                    # ✨ 魔法排版：识别到结构化标题时，加粗并染成深蓝色
+                    if line.startswith("【"):
+                        p.font.bold = True
+                        p.font.color.rgb = PptxRGBColor(0, 51, 102)
     
     path = f"{filename}.pptx"
     prs.save(path)
@@ -293,48 +309,41 @@ def generate_ppt(data, filename, model_name):
 with st.sidebar:
     st.header("🐳 DeepSeek 控制台")
     api_key = st.text_input("DeepSeek API Key", type="password")
-    
-    tavily_key = st.text_input("Tavily API Key (必填)", type="password", help="必须填入此 Key 才能驱动云端极速新闻引擎！")
-    
+    tavily_key = st.text_input("Tavily API Key (必填)", type="password")
     model_id = st.selectbox("模型", ["deepseek-chat"], index=0)
     st.divider()
-    
     time_opt = st.selectbox("时间范围（绝对严控）", ["过去 24 小时", "过去 1 周", "过去 1 个月", "不限时间"], index=0)
     time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m", "不限时间": None}
-    
     st.markdown("**搜外媒请用英文名 (如 Google、Apple)**")
     sites = st.text_area("重点搜索源", "techcrunch.com\ntheverge.com\nengadget.com\ncnet.com\nbloomberg.com/technology\nelectrek.co\ninsideevs.com\nroadtovr.com\nuploadvr.com\n36kr.com\nithome.com\nhuxiu.com\ngeekpark.net\nvrtuoluo.cn\nd1ev.com", height=250)
     file_name = st.text_input("文件名", f"深度研报_{datetime.date.today()}")
 
-st.title("🐳 企业情报探员 (PPT双擎输出稳健版)")
+st.title("🐳 企业情报探员 (稳健双擎·持久化版)")
 query_input = st.text_input("输入主题 (用 \\ 隔开，外媒源建议用英文如：Google \\ Apple)", "Google \\ OpenAI \\ Anthropic")
-btn = st.button("🚀 开始生成研报", type="primary")
 
-if btn:
+# 🔴 按钮触发执行，但结果展示交给 session_state
+if st.button("🚀 开始生成研报", type="primary"):
     if not api_key or not tavily_key:
         st.error("❌ 请先在左侧边栏填入 DeepSeek 和 Tavily 的 API Key！")
     elif not query_input:
         st.warning("请输入关键词！")
     else:
         check_and_install_playwright()
-        
         topics = [t.strip() for t in query_input.split('\\') if t.strip()]
         all_data = []
         ai = EnterpriseDeepSeekDriver(api_key, model_id)
         current_date_str = datetime.date.today().strftime("%Y年%m月%d日")
-        
         global_seen_titles = []
 
         st.info("🚀 探员已出击，Tavily 企业级检索正在运行...")
 
         for topic in topics:
             st.markdown(f"#### 🔵 追踪目标: 【{topic}】 (要求: {time_opt})")
-            
             with st.spinner(f"正在全网搜寻关于【{topic}】的最新线索..."):
                 links = search_web(topic, sites, time_limit_dict[time_opt], tavily_key=tavily_key)
             
             if not links: 
-                st.warning(f"⚠️ {topic}：在严格的【{time_opt}】限制内未搜寻到新闻。说明目标近期很安静！")
+                st.warning(f"⚠️ {topic}：在严格的【{time_opt}】限制内未搜寻到新闻。")
                 continue
                 
             st.write(f"🔍 成功截获 {len(links)} 个相关网址，启动智能爬虫...")
@@ -343,9 +352,8 @@ if btn:
                 full_text_data, valid_count = safe_run_async_crawler(urls=[r['href'] for r in links])
 
             if full_text_data:
-                st.write(f"🧠 成功提取 {valid_count} 个纯净网页。DeepSeek 正在执行清洗与排版归纳...")
-                
-                with st.spinner("AI 正在剔除旧闻与重复项，撰写商业分析..."):
+                st.write(f"🧠 成功提取 {valid_count} 个纯净网页。AI正在清洗与排版...")
+                with st.spinner("正在提炼并渲染多端研报..."):
                     final_news_list = map_reduce_analysis(ai, topic, full_text_data, current_date_str, time_opt)
                 
                 if final_news_list:
@@ -357,41 +365,40 @@ if btn:
                             if similarity > 0.6:
                                 is_duplicate = True
                                 break
-                        
                         if not is_duplicate:
                             deduped_news.append(news)
                             global_seen_titles.append(news.title)
                     
                     if deduped_news:
                         all_data.append({"topic": topic, "data": deduped_news})
-                        filtered_count = len(final_news_list) - len(deduped_news)
-                        st.success(f"✅ 【{topic}】分析完毕！已锁定 {len(deduped_news)} 条新鲜情报。" + 
-                                   (f"(已跨主题去重过滤 {filtered_count} 条重复事件)" if filtered_count > 0 else ""))
+                        st.success(f"✅ 【{topic}】分析完毕！已锁定 {len(deduped_news)} 条新鲜情报。")
                     else:
-                        st.warning(f"⚠️ 【{topic}】提炼出的新闻均与之前的主题高度重合，已执行全局去重抹杀！")
-                        
+                        st.warning(f"⚠️ 【{topic}】高度重合，已抹杀！")
                 else:
-                    st.warning(f"⚠️ 【{topic}】搜到的网页经 AI 严格审判，全被判定为旧闻或非核心新闻，已执行抹杀过滤。")
+                    st.warning(f"⚠️ 【{topic}】全是旧闻，已过滤。")
             else:
-                st.error(f"❌ 网页抓取失败或正文均为空，目标网站反爬拦截。")
-            
+                st.error(f"❌ 抓取失败或防爬拦截。")
             st.divider()
 
         if all_data:
-            # 🔴 同时生成 Word 和 PPT
-            path_word = generate_word(all_data, file_name, model_id)
-            path_ppt = generate_ppt(all_data, file_name, model_id)
-            
-            st.balloons()
-            st.success("🎉 全链条任务执行完毕！老板专供版 PPT 已就绪。")
-            
-            # 🔴 并排显示两个下载按钮
-            col1, col2 = st.columns(2)
-            with col1:
-                with open(path_word, "rb") as f:
-                    st.download_button("📝 立即下载深度研报 (Word)", f, file_name=path_word, type="secondary")
-            with col2:
-                with open(path_ppt, "rb") as f:
-                    st.download_button("📊 立即下载汇报演示 (PPT)", f, file_name=path_ppt, type="primary")
+            # 🔴 保存路径到会话状态中
+            st.session_state.word_path = generate_word(all_data, file_name, model_id)
+            st.session_state.ppt_path = generate_ppt(all_data, file_name, model_id)
+            st.session_state.report_ready = True
+            # 使用 rerurn 刷新页面，跳出按钮的限制域
+            st.rerun()
         else:
-            st.error(f"❌ 任务结束。在严格的时效与去重约束下，所有关键词均未产生独立且有效的大事件情报。")
+            st.error(f"❌ 任务结束。未产生情报。")
+
+# 🔴 核心修复 1：把下载界面脱离出按钮，只要有记录就永久显示！
+if st.session_state.report_ready:
+    st.balloons()
+    st.success("🎉 全链条任务执行完毕！研报与演示文稿已永久保存在本次会话中，可随意下载。")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        with open(st.session_state.word_path, "rb") as f:
+            st.download_button("📝 立即下载深度研报 (Word)", f, file_name=st.session_state.word_path, type="secondary")
+    with col2:
+        with open(st.session_state.ppt_path, "rb") as f:
+            st.download_button("📊 立即下载汇报演示 (PPT)", f, file_name=st.session_state.ppt_path, type="primary")
