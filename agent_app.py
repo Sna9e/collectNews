@@ -159,7 +159,7 @@ def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
         要求的时间范围是：【{time_opt}】。
         任务：从以下文本提取关于【{topic}】的新闻情报。
         红线：
-        1. 严格时间审查：发现发生时间早于【{time_opt}】之前（如几个月前、或者去年），直接丢弃相关新闻！
+        1. 严格时间审查：发现发生时间早于【{time_opt}】之前（如几个月前、或者去年），直接丢弃相关新闻，但是深度细节中不用提到丢弃了新闻！
         2. 【{topic}】必须是绝对主角！
         无符合条件的内容必须返回 `{{"news": []}}`。
         文本：{doc.page_content}
@@ -182,7 +182,7 @@ def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
         2. 合并去重：报道同一事件的新闻必须合并。
         3. 深度扩写与高级排版：将每条新闻的 summary 扩展至 300 字左右。必须在 summary 中使用明显的分段和换行，明确包含以下三个部分：
            【事件核心】：概括事件，将整体事件清晰明确的描述出来
-           【深度细节】：核心数据与细节支撑，需要把核心细节与行业关注数据详细摘录
+           【深度细节】：核心数据与细节支撑，需要把核心细节与行业关注数据详细摘录。不用特意提到在新闻在时效性内
            【行业影响】：精简的行业深远影响，此事件可能对行业以及相关产业有什么影响，市场会对此有什么反应与措施
         4. 按重要性降序，最多保留最核心的 5 条。
         数据：{combined_json}
@@ -266,7 +266,7 @@ with st.sidebar:
     time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m", "不限时间": None}
     
     st.markdown("**搜外媒请用英文名 (如 Google、Apple)**")
-    sites = st.text_area("重点搜索源", "techcrunch.com\nbloomberg.com\ntechnology\nithome.com\ntheverge.com\nreadhub.cn\n36kr.com", height=130)
+    sites = st.text_area("重点搜索源", "techcrunch.com\ntheverge.com\nengadget.com\ncnet.com\nbloomberg.com/technology\nelectrek.co\ninsideevs.com\nroadtovr.com\nuploadvr.com\n36kr.com\nithome.com\nhuxiu.com\ngeekpark.net\nvrtuoluo.cn\nd1ev.com", height=250)
     file_name = st.text_input("文件名", f"深度研报_{datetime.date.today()}")
 
 st.title("🐳 企业情报探员 (纯净排版升级版)")
@@ -349,3 +349,4 @@ if btn:
                 st.download_button("📥 立即下载精美排版研报 (Word)", f, file_name=path, type="primary")
         else:
             st.error(f"❌ 任务结束。在严格的时效与去重约束下，所有关键词均未产生独立且有效的大事件情报。")
+
