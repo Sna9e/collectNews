@@ -27,12 +27,16 @@ else:
     os.environ.pop("HTTP_PROXY", None)
     os.environ.pop("HTTPS_PROXY", None)
 
-# ================= 2. 爬虫与文档库引用 =================
+# ================= 2. 爬虫、文档与PPT排版库引用 =================
 from crawl4ai import AsyncWebCrawler
 from docx import Document
-from docx.shared import RGBColor, Pt, Inches
+from docx.shared import RGBColor, Pt as DocxPt
 from docx.oxml.ns import qn
-from docx.enum.text import WD_ALIGN_PARAGRAPH # 用于Word排版居中
+from docx.enum.text import WD_ALIGN_PARAGRAPH 
+
+# 🔴 新增：PPT 核心排版引擎
+from pptx import Presentation
+from pptx.util import Inches, Pt as PptxPt
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -44,7 +48,6 @@ class NewsItem(BaseModel):
     title: str = Field(description="新闻标题（务必翻译为中文）")
     source: str = Field(description="来源媒体（保留原名）")
     date_check: str = Field(description="严格核实新闻发生的真实日期，格式 YYYY-MM-DD。")
-    # 🔴 升级：放宽到300字，强制三段式结构
     summary: str = Field(description="约300字的深度商业分析。必须严格分段并带有标识：【事件核心】、【深度细节/数据支撑】、【行业深远影响】。")
     importance: int = Field(description="重要性 1-5")
 
@@ -95,7 +98,6 @@ def check_and_install_playwright():
     except Exception:
         return False
 
-# 🔴 升级：纯净版 Tavily 搜索（移除所有备用引擎代码）
 def search_web(query, sites_text, timelimit, max_results=10, tavily_key=""):
     if not tavily_key: return []
     sites = [s.strip() for s in sites_text.split('\n') if s.strip()]
@@ -106,7 +108,7 @@ def search_web(query, sites_text, timelimit, max_results=10, tavily_key=""):
             "api_key": tavily_key,
             "query": query, 
             "search_depth": "advanced",
-            "topic": "news", # 强制新闻模式
+            "topic": "news", 
             "max_results": max_results
         }
         if sites: payload["include_domains"] = sites
@@ -190,25 +192,20 @@ def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
     final_report = ai_driver.analyze_structural(reduce_prompt, NewsReport)
     return final_report.news if final_report else []
 
-# 🔴 升级：Word 文档华丽排版手术
 def generate_word(data, filename, model_name):
     doc = Document()
-    
-    # 基础字体设置
     normal_style = doc.styles['Normal']
     normal_style.font.name = '微软雅黑'
     normal_style._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
-    normal_style.font.size = Pt(10.5) 
+    normal_style.font.size = DocxPt(10.5) 
     
-    # 标题字体设置
     for i in range(1, 4):
         h_style = doc.styles[f'Heading {i}']
         h_style.font.name = '微软雅黑'
         h_style._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
         if i == 1:
-            h_style.font.color.rgb = RGBColor(0, 51, 102) # 专题标题深蓝色
+            h_style.font.color.rgb = RGBColor(0, 51, 102)
 
-    # --- 封面风格的头部 ---
     title = doc.add_heading("DeepSeek 企业级深度科技研报", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
@@ -216,12 +213,10 @@ def generate_word(data, filename, model_name):
     meta_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta_run = meta_p.add_run(f"生成日期: {datetime.date.today()}  |  数据来源: Tavily 商业资讯引擎  |  分析模型: {model_name}")
     meta_run.font.color.rgb = RGBColor(128, 128, 128)
-    meta_run.font.size = Pt(9)
+    meta_run.font.size = DocxPt(9)
     
-    # 添加一个低调的分割线
     doc.add_paragraph("━" * 50).alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    # --- 正文排版 ---
     for section in data:
         doc.add_heading(f"🔷 专题：{section['topic']}", level=1)
         if not section['data']:
@@ -231,18 +226,15 @@ def generate_word(data, filename, model_name):
         for news in section['data']:
             doc.add_heading(f"🔹 {news.title}", level=2)
             
-            # 美化的元数据行
             p_info = doc.add_paragraph()
             run_info = p_info.add_run(f"    📌 来源: {news.source}    |    🕒 时间: {news.date_check}    |    🔥 价值评级: {'⭐'*news.importance}")
             run_info.font.color.rgb = RGBColor(100, 100, 100)
             run_info.font.bold = True
             
-            # 正文段落（如果大模型生成了换行符，这里会自动渲染成分段）
             p_summary = doc.add_paragraph(news.summary)
-            p_summary.paragraph_format.line_spacing = 1.5 # 1.5倍行距，阅读更舒适
-            p_summary.paragraph_format.first_line_indent = Pt(21) # 首行缩进
+            p_summary.paragraph_format.line_spacing = 1.5 
+            p_summary.paragraph_format.first_line_indent = DocxPt(21) 
             
-            # 段落之间的优雅分隔符
             divider = doc.add_paragraph("┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈")
             divider.alignment = WD_ALIGN_PARAGRAPH.CENTER
             divider.runs[0].font.color.rgb = RGBColor(200, 200, 200)
@@ -251,12 +243,61 @@ def generate_word(data, filename, model_name):
     doc.save(path)
     return path
 
+# 🔴 新增：极速原生 PPT 生成器
+def generate_ppt(data, filename, model_name):
+    prs = Presentation()
+    
+    # 1. 制作高逼格封面
+    title_slide_layout = prs.slide_layouts[0] # 封面排版
+    slide = prs.slides.add_slide(title_slide_layout)
+    title = slide.shapes.title
+    subtitle = slide.placeholders[1]
+    title.text = "行业前沿情报深度分析"
+    subtitle.text = f"生成日期: {datetime.date.today()}\n数据引擎: Tavily & {model_name}"
+
+    # 2. 循环写入专题和新闻
+    for section in data:
+        # 添加【专题过渡页】
+        if section['data']:
+            section_layout = prs.slide_layouts[2] # 节标题排版
+            sec_slide = prs.slides.add_slide(section_layout)
+            sec_slide.shapes.title.text = f"🎯 追踪目标：{section['topic']}"
+            
+            # 为该专题下的每一条新闻生成一页 PPT
+            for news in section['data']:
+                content_layout = prs.slide_layouts[1] # 标题+内容排版
+                slide = prs.slides.add_slide(content_layout)
+                
+                # 设置单页标题（新闻标题）
+                title_shape = slide.shapes.title
+                title_shape.text = news.title
+                title_shape.text_frame.paragraphs[0].font.size = PptxPt(28)
+                
+                # 设置单页正文
+                body_shape = slide.shapes.placeholders[1]
+                tf = body_shape.text_frame
+                tf.clear() # 清空默认格式
+                
+                # 写入元数据 (来源、时间、热度)
+                p_meta = tf.add_paragraph()
+                p_meta.text = f"📌 来源: {news.source}  |  🕒 {news.date_check}  |  🔥 热度: {'⭐'*news.importance}"
+                p_meta.font.size = PptxPt(14)
+                p_meta.font.color.rgb = RGBColor(128, 128, 128)
+                
+                # 写入深度分析正文
+                p_summary = tf.add_paragraph()
+                p_summary.text = f"\n{news.summary}"
+                p_summary.font.size = PptxPt(16)
+    
+    path = f"{filename}.pptx"
+    prs.save(path)
+    return path
+
 # ================= 6. 主界面 =================
 with st.sidebar:
     st.header("🐳 DeepSeek 控制台")
     api_key = st.text_input("DeepSeek API Key", type="password")
     
-    # 🔴 强制必填提示
     tavily_key = st.text_input("Tavily API Key (必填)", type="password", help="必须填入此 Key 才能驱动云端极速新闻引擎！")
     
     model_id = st.selectbox("模型", ["deepseek-chat"], index=0)
@@ -269,12 +310,11 @@ with st.sidebar:
     sites = st.text_area("重点搜索源", "techcrunch.com\ntheverge.com\nengadget.com\ncnet.com\nbloomberg.com/technology\nelectrek.co\ninsideevs.com\nroadtovr.com\nuploadvr.com\n36kr.com\nithome.com\nhuxiu.com\ngeekpark.net\nvrtuoluo.cn\nd1ev.com", height=250)
     file_name = st.text_input("文件名", f"深度研报_{datetime.date.today()}")
 
-st.title("🐳 企业情报探员 (纯净排版升级版)")
+st.title("🐳 企业情报探员 (PPT双擎输出版)")
 query_input = st.text_input("输入主题 (用 \\ 隔开，外媒源建议用英文如：Google \\ Apple)", "Google \\ OpenAI \\ Anthropic")
 btn = st.button("🚀 开始生成研报", type="primary")
 
 if btn:
-    # 🔴 拦截未填 API 的情况
     if not api_key or not tavily_key:
         st.error("❌ 请先在左侧边栏填入 DeepSeek 和 Tavily 的 API Key！")
     elif not query_input:
@@ -342,11 +382,21 @@ if btn:
             st.divider()
 
         if all_data:
-            path = generate_word(all_data, file_name, model_id)
+            # 🔴 同时生成 Word 和 PPT
+            path_word = generate_word(all_data, file_name, model_id)
+            path_ppt = generate_ppt(all_data, file_name, model_id)
+            
             st.balloons()
-            st.success("🎉 全链条任务执行完毕！请下载查看最新高级排版研报。")
-            with open(path, "rb") as f:
-                st.download_button("📥 立即下载精美排版研报 (Word)", f, file_name=path, type="primary")
+            st.success("🎉 全链条任务执行完毕！老板专供版 PPT 已就绪。")
+            
+            # 🔴 并排显示两个下载按钮
+            col1, col2 = st.columns(2)
+            with col1:
+                with open(path_word, "rb") as f:
+                    st.download_button("📝 立即下载深度研报 (Word)", f, file_name=path_word, type="secondary")
+            with col2:
+                with open(path_ppt, "rb") as f:
+                    # PPT 按钮设为 primary，吸引眼球
+                    st.download_button("📊 立即下载汇报演示 (PPT)", f, file_name=path_ppt, type="primary")
         else:
             st.error(f"❌ 任务结束。在严格的时效与去重约束下，所有关键词均未产生独立且有效的大事件情报。")
-
