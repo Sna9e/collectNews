@@ -13,7 +13,7 @@ import difflib
 from typing import List
 
 # ================= 0. 核心库引用 =================
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import OpenAI  
 
@@ -29,14 +29,16 @@ else:
 
 # ================= 2. 爬虫、文档与PPT排版库引用 =================
 from crawl4ai import AsyncWebCrawler
+
+# 🔴 关键修复：把 Word 和 PPT 的颜色/字体工具严格隔离，防止张冠李戴！
 from docx import Document
-from docx.shared import RGBColor, Pt as DocxPt
+from docx.shared import RGBColor as DocxRGBColor, Pt as DocxPt
 from docx.oxml.ns import qn
 from docx.enum.text import WD_ALIGN_PARAGRAPH 
 
-# 🔴 新增：PPT 核心排版引擎
 from pptx import Presentation
 from pptx.util import Inches, Pt as PptxPt
+from pptx.dml.color import RGBColor as PptxRGBColor
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -192,6 +194,7 @@ def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
     final_report = ai_driver.analyze_structural(reduce_prompt, NewsReport)
     return final_report.news if final_report else []
 
+# 🔴 Word 文档华丽排版手术
 def generate_word(data, filename, model_name):
     doc = Document()
     normal_style = doc.styles['Normal']
@@ -204,7 +207,7 @@ def generate_word(data, filename, model_name):
         h_style.font.name = '微软雅黑'
         h_style._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
         if i == 1:
-            h_style.font.color.rgb = RGBColor(0, 51, 102)
+            h_style.font.color.rgb = DocxRGBColor(0, 51, 102)
 
     title = doc.add_heading("DeepSeek 企业级深度科技研报", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -212,7 +215,7 @@ def generate_word(data, filename, model_name):
     meta_p = doc.add_paragraph()
     meta_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta_run = meta_p.add_run(f"生成日期: {datetime.date.today()}  |  数据来源: Tavily 商业资讯引擎  |  分析模型: {model_name}")
-    meta_run.font.color.rgb = RGBColor(128, 128, 128)
+    meta_run.font.color.rgb = DocxRGBColor(128, 128, 128)
     meta_run.font.size = DocxPt(9)
     
     doc.add_paragraph("━" * 50).alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -228,7 +231,7 @@ def generate_word(data, filename, model_name):
             
             p_info = doc.add_paragraph()
             run_info = p_info.add_run(f"    📌 来源: {news.source}    |    🕒 时间: {news.date_check}    |    🔥 价值评级: {'⭐'*news.importance}")
-            run_info.font.color.rgb = RGBColor(100, 100, 100)
+            run_info.font.color.rgb = DocxRGBColor(100, 100, 100)
             run_info.font.bold = True
             
             p_summary = doc.add_paragraph(news.summary)
@@ -237,54 +240,47 @@ def generate_word(data, filename, model_name):
             
             divider = doc.add_paragraph("┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈")
             divider.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            divider.runs[0].font.color.rgb = RGBColor(200, 200, 200)
+            divider.runs[0].font.color.rgb = DocxRGBColor(200, 200, 200)
     
     path = f"{filename}.docx"
     doc.save(path)
     return path
 
-# 🔴 新增：极速原生 PPT 生成器
+# 🔴 PPT 极速原生生成器
 def generate_ppt(data, filename, model_name):
     prs = Presentation()
     
-    # 1. 制作高逼格封面
-    title_slide_layout = prs.slide_layouts[0] # 封面排版
+    title_slide_layout = prs.slide_layouts[0] 
     slide = prs.slides.add_slide(title_slide_layout)
     title = slide.shapes.title
     subtitle = slide.placeholders[1]
     title.text = "行业前沿情报深度分析"
     subtitle.text = f"生成日期: {datetime.date.today()}\n数据引擎: Tavily & {model_name}"
 
-    # 2. 循环写入专题和新闻
     for section in data:
-        # 添加【专题过渡页】
         if section['data']:
-            section_layout = prs.slide_layouts[2] # 节标题排版
+            section_layout = prs.slide_layouts[2] 
             sec_slide = prs.slides.add_slide(section_layout)
             sec_slide.shapes.title.text = f"🎯 追踪目标：{section['topic']}"
             
-            # 为该专题下的每一条新闻生成一页 PPT
             for news in section['data']:
-                content_layout = prs.slide_layouts[1] # 标题+内容排版
+                content_layout = prs.slide_layouts[1] 
                 slide = prs.slides.add_slide(content_layout)
                 
-                # 设置单页标题（新闻标题）
                 title_shape = slide.shapes.title
                 title_shape.text = news.title
                 title_shape.text_frame.paragraphs[0].font.size = PptxPt(28)
                 
-                # 设置单页正文
                 body_shape = slide.shapes.placeholders[1]
                 tf = body_shape.text_frame
-                tf.clear() # 清空默认格式
+                tf.clear() 
                 
-                # 写入元数据 (来源、时间、热度)
                 p_meta = tf.add_paragraph()
                 p_meta.text = f"📌 来源: {news.source}  |  🕒 {news.date_check}  |  🔥 热度: {'⭐'*news.importance}"
                 p_meta.font.size = PptxPt(14)
-                p_meta.font.color.rgb = RGBColor(128, 128, 128)
+                # 🔴 关键修复：使用 PPT 专用的 RGBColor 刷子
+                p_meta.font.color.rgb = PptxRGBColor(128, 128, 128)
                 
-                # 写入深度分析正文
                 p_summary = tf.add_paragraph()
                 p_summary.text = f"\n{news.summary}"
                 p_summary.font.size = PptxPt(16)
@@ -310,7 +306,7 @@ with st.sidebar:
     sites = st.text_area("重点搜索源", "techcrunch.com\ntheverge.com\nengadget.com\ncnet.com\nbloomberg.com/technology\nelectrek.co\ninsideevs.com\nroadtovr.com\nuploadvr.com\n36kr.com\nithome.com\nhuxiu.com\ngeekpark.net\nvrtuoluo.cn\nd1ev.com", height=250)
     file_name = st.text_input("文件名", f"深度研报_{datetime.date.today()}")
 
-st.title("🐳 企业情报探员 (PPT双擎输出版)")
+st.title("🐳 企业情报探员 (PPT双擎输出稳健版)")
 query_input = st.text_input("输入主题 (用 \\ 隔开，外媒源建议用英文如：Google \\ Apple)", "Google \\ OpenAI \\ Anthropic")
 btn = st.button("🚀 开始生成研报", type="primary")
 
@@ -396,7 +392,6 @@ if btn:
                     st.download_button("📝 立即下载深度研报 (Word)", f, file_name=path_word, type="secondary")
             with col2:
                 with open(path_ppt, "rb") as f:
-                    # PPT 按钮设为 primary，吸引眼球
                     st.download_button("📊 立即下载汇报演示 (PPT)", f, file_name=path_ppt, type="primary")
         else:
             st.error(f"❌ 任务结束。在严格的时效与去重约束下，所有关键词均未产生独立且有效的大事件情报。")
