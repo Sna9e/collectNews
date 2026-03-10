@@ -9,7 +9,7 @@ import concurrent.futures
 import platform
 import urllib.request
 import urllib.parse
-import re
+import difflib
 from typing import List
 
 # ================= 0. 核心库引用 =================
@@ -28,15 +28,11 @@ else:
     os.environ.pop("HTTPS_PROXY", None)
 
 # ================= 2. 爬虫与文档库引用 =================
-try:
-    from ddgs import DDGS
-except ImportError:
-    from duckduckgo_search import DDGS
-
 from crawl4ai import AsyncWebCrawler
 from docx import Document
-from docx.shared import RGBColor, Pt
+from docx.shared import RGBColor, Pt, Inches
 from docx.oxml.ns import qn
+from docx.enum.text import WD_ALIGN_PARAGRAPH # 用于Word排版居中
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -47,8 +43,9 @@ st.set_page_config(page_title="DeepSeek 科技探员", page_icon="🐳", layout=
 class NewsItem(BaseModel):
     title: str = Field(description="新闻标题（务必翻译为中文）")
     source: str = Field(description="来源媒体（保留原名）")
-    date_check: str = Field(description="真实日期 YYYY-MM-DD")
-    summary: str = Field(description="不少于400字的深度分析，包含：事件核心、深度细节、行业影响（纯中文）")
+    date_check: str = Field(description="严格核实新闻发生的真实日期，格式 YYYY-MM-DD。")
+    # 🔴 升级：放宽到300字，强制三段式结构
+    summary: str = Field(description="约300字的深度商业分析。必须严格分段并带有标识：【事件核心】、【深度细节/数据支撑】、【行业深远影响】。")
     importance: int = Field(description="重要性 1-5")
 
 class NewsReport(BaseModel):
@@ -76,7 +73,7 @@ class EnterpriseDeepSeekDriver:
                 messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
                 temperature=0.1, 
-                max_tokens=8192
+                max_tokens=4096 
             )
             raw_text = response.choices[0].message.content.strip()
             try:
@@ -98,65 +95,35 @@ def check_and_install_playwright():
     except Exception:
         return False
 
-# 🔴 史诗级修复：引入 Tavily API 与 Yahoo 强力穿透
-def search_web(query, sites_text, timelimit, max_results=15, tavily_key=""):
+# 🔴 升级：纯净版 Tavily 搜索（移除所有备用引擎代码）
+def search_web(query, sites_text, timelimit, max_results=10, tavily_key=""):
+    if not tavily_key: return []
     sites = [s.strip() for s in sites_text.split('\n') if s.strip()]
-    current_year = datetime.date.today().year
     
-    # ======== 通道 1：企业级 Tavily API (无视封锁，100%成功，强烈推荐) ========
-    if tavily_key:
-        try:
-            url = "https://api.tavily.com/search"
-            payload = {
-                "api_key": tavily_key,
-                "query": f"{query} {current_year} news",
-                "search_depth": "advanced",
-                "max_results": max_results
-            }
-            if sites: payload["include_domains"] = sites
-            
-            data = json.dumps(payload).encode('utf-8')
-            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-            resp = json.loads(urllib.request.urlopen(req, timeout=15).read().decode('utf-8'))
-            
-            results = [{'href': r['url']} for r in resp.get('results', [])]
-            if results: return results
-        except Exception:
-            pass # 失败则降级
-
-    # ======== 通道 2：Yahoo 暗网穿透 (云端存活率最高的免费引擎) ========
     try:
-        final_query = f"{query} {current_year} news"
-        if sites: final_query += f" {' OR '.join(['site:'+s for s in sites])}"
-        yahoo_url = f"https://search.yahoo.com/search?p={urllib.parse.quote(final_query)}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        req = urllib.request.Request(yahoo_url, headers=headers)
-        html = urllib.request.urlopen(req, timeout=10).read().decode('utf-8')
+        url = "https://api.tavily.com/search"
+        payload = {
+            "api_key": tavily_key,
+            "query": query, 
+            "search_depth": "advanced",
+            "topic": "news", # 强制新闻模式
+            "max_results": max_results
+        }
+        if sites: payload["include_domains"] = sites
         
-        links = re.findall(r'href="(https?://[^"]+)"', html)
-        results = []
-        urls_seen = set()
-        for link in links:
-            if "yahoo.com" not in link and "javascript" not in link and "search" not in link:
-                if sites and not any(s in link for s in sites): continue
-                if link not in urls_seen:
-                    urls_seen.add(link)
-                    results.append({'href': link})
-            if len(results) >= max_results: break
-        if results: return results
-    except Exception:
-        pass
+        if timelimit == "d": payload["days"] = 2 
+        elif timelimit == "w": payload["days"] = 7
+        elif timelimit == "m": payload["days"] = 30
 
-    # ======== 通道 3：DuckDuckGo 传统通道 (保底) ========
-    try:
-        final_query = f"{query} {current_year} news"
-        if sites: final_query += f" {' OR '.join(['site:'+s for s in sites])}"
-        with DDGS(timeout=10) as ddgs: 
-            res = list(ddgs.text(final_query, max_results=max_results, timelimit=timelimit))
-            if res: return res
-    except Exception: pass 
-                
-    return []
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+        resp = json.loads(urllib.request.urlopen(req, timeout=15).read().decode('utf-8'))
+        
+        results = [{'href': r['url']} for r in resp.get('results', [])]
+        return results
+    except Exception as e:
+        print(f"Tavily Search Failed: {e}")
+        return []
 
 async def crawl_urls_concurrently(urls):
     full_content = ""
@@ -170,7 +137,7 @@ async def crawl_urls_concurrently(urls):
                 valid_count += 1
                 markdown_text = res.fit_markdown if hasattr(res, 'fit_markdown') and res.fit_markdown else res.markdown
                 if markdown_text and len(markdown_text) > 200:
-                    full_content += f"\n\n=== SOURCE START: {urls[i]} ===\n{markdown_text[:15000]}\n=== SOURCE END ===\n"
+                    full_content += f"\n\n=== SOURCE START: {urls[i]} ===\n{markdown_text[:6000]}\n=== SOURCE END ===\n"
     return full_content, valid_count
 
 def safe_run_async_crawler(urls):
@@ -183,15 +150,17 @@ def safe_run_async_crawler(urls):
 
 def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
     if not full_text or len(full_text) < 100: return []
-    docs = RecursiveCharacterTextSplitter(chunk_size=15000, chunk_overlap=1500).create_documents([full_text])
+    docs = RecursiveCharacterTextSplitter(chunk_size=8000, chunk_overlap=1000).create_documents([full_text])
     all_extracted_news = []
 
     def process_single_doc(doc):
         map_prompt = f"""
-        今天是 {current_date}。从以下文本提取关于【{topic}】的新闻情报。
-        生死红线：
-        1. 【{topic}】必须是绝对主角，顺带提及的直接丢弃！
-        2. 严格限制在【{time_opt}】内发生，明显的旧闻直接丢弃！
+        【全局时间锚点】：今天是 **{current_date}**。
+        要求的时间范围是：【{time_opt}】。
+        任务：从以下文本提取关于【{topic}】的新闻情报。
+        红线：
+        1. 严格时间审查：发现发生时间早于【{time_opt}】之前（如几个月前、或者去年），直接丢弃相关新闻！
+        2. 【{topic}】必须是绝对主角！
         无符合条件的内容必须返回 `{{"news": []}}`。
         文本：{doc.page_content}
         """
@@ -206,44 +175,77 @@ def map_reduce_analysis(ai_driver, topic, full_text, current_date, time_opt):
     combined_json = json.dumps([item.model_dump() for item in all_extracted_news], ensure_ascii=False)
 
     reduce_prompt = f"""
-    今天是 {current_date}。你是极其严苛的科技媒体总编。
-    任务：
-    1. 彻底清洗：剔除不在【{time_opt}】的旧闻和非主角新闻。
-    2. 合并去重。
-    3. 扩写：不少于 400 字（包含：事件核心、深度细节、行业影响）。
-    4. 纯中文专业排版。
-    5. 按重要性降序，最多保留 6 条。
-    数据：{combined_json}
+        【全局时间锚点】：今天是 **{current_date}**。
+        你是极其严苛的科技媒体总编。
+        任务：
+        1. 终极时间清洗：任何陈年旧闻，全部无情删掉！
+        2. 合并去重：报道同一事件的新闻必须合并。
+        3. 深度扩写与高级排版：将每条新闻的 summary 扩展至 300 字左右。必须在 summary 中使用明显的分段和换行，明确包含以下三个部分：
+           【事件核心】：概括事件，将整体事件清晰明确的描述出来
+           【深度细节】：核心数据与细节支撑，需要把核心细节与行业关注数据详细摘录
+           【行业影响】：精简的行业深远影响，此事件可能对行业以及相关产业有什么影响，市场会对此有什么反应与措施
+        4. 按重要性降序，最多保留最核心的 5 条。
+        数据：{combined_json}
     """
     final_report = ai_driver.analyze_structural(reduce_prompt, NewsReport)
     return final_report.news if final_report else []
 
+# 🔴 升级：Word 文档华丽排版手术
 def generate_word(data, filename, model_name):
     doc = Document()
+    
+    # 基础字体设置
     normal_style = doc.styles['Normal']
     normal_style.font.name = '微软雅黑'
     normal_style._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
     normal_style.font.size = Pt(10.5) 
+    
+    # 标题字体设置
     for i in range(1, 4):
         h_style = doc.styles[f'Heading {i}']
         h_style.font.name = '微软雅黑'
         h_style._element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
+        if i == 1:
+            h_style.font.color.rgb = RGBColor(0, 51, 102) # 专题标题深蓝色
 
-    doc.add_heading("DeepSeek 深度科技研报", 0)
-    doc.add_paragraph(f"生成日期: {datetime.date.today()} | 引擎: {model_name}")
+    # --- 封面风格的头部 ---
+    title = doc.add_heading("DeepSeek 企业级深度科技研报", 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    meta_p = doc.add_paragraph()
+    meta_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    meta_run = meta_p.add_run(f"生成日期: {datetime.date.today()}  |  数据来源: Tavily 商业资讯引擎  |  分析模型: {model_name}")
+    meta_run.font.color.rgb = RGBColor(128, 128, 128)
+    meta_run.font.size = Pt(9)
+    
+    # 添加一个低调的分割线
+    doc.add_paragraph("━" * 50).alignment = WD_ALIGN_PARAGRAPH.CENTER
 
+    # --- 正文排版 ---
     for section in data:
-        doc.add_heading(f"专题：{section['topic']}", level=1)
+        doc.add_heading(f"🔷 专题：{section['topic']}", level=1)
         if not section['data']:
-            doc.add_paragraph("在指定时间范围内，未发现重大情报。")
+            doc.add_paragraph("    在指定时间范围内，未发现符合标准的重大情报。").font.italic = True
             continue
+            
         for news in section['data']:
-            doc.add_heading(news.title, level=2)
-            p = doc.add_paragraph()
-            run = p.add_run(f"来源: {news.source} | 时间: {news.date_check} | 热度: {'⭐'*news.importance}")
-            run.font.color.rgb = RGBColor(128, 128, 128)
-            doc.add_paragraph(news.summary)
-            doc.add_paragraph("=" * 40)
+            doc.add_heading(f"🔹 {news.title}", level=2)
+            
+            # 美化的元数据行
+            p_info = doc.add_paragraph()
+            run_info = p_info.add_run(f"    📌 来源: {news.source}    |    🕒 时间: {news.date_check}    |    🔥 价值评级: {'⭐'*news.importance}")
+            run_info.font.color.rgb = RGBColor(100, 100, 100)
+            run_info.font.bold = True
+            
+            # 正文段落（如果大模型生成了换行符，这里会自动渲染成分段）
+            p_summary = doc.add_paragraph(news.summary)
+            p_summary.paragraph_format.line_spacing = 1.5 # 1.5倍行距，阅读更舒适
+            p_summary.paragraph_format.first_line_indent = Pt(21) # 首行缩进
+            
+            # 段落之间的优雅分隔符
+            divider = doc.add_paragraph("┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈")
+            divider.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            divider.runs[0].font.color.rgb = RGBColor(200, 200, 200)
     
     path = f"{filename}.docx"
     doc.save(path)
@@ -254,25 +256,27 @@ with st.sidebar:
     st.header("🐳 DeepSeek 控制台")
     api_key = st.text_input("DeepSeek API Key", type="password")
     
-    # 🔴 新增：Tavily 破壁引擎 (可选)
-    tavily_key = st.text_input("Tavily Search API (强烈推荐)", type="password", help="如果云端持续搜不到新闻，去 tavily.com 免费获取这个 Key，100% 解决问题！")
+    # 🔴 强制必填提示
+    tavily_key = st.text_input("Tavily API Key (必填)", type="password", help="必须填入此 Key 才能驱动云端极速新闻引擎！")
     
     model_id = st.selectbox("模型", ["deepseek-chat"], index=0)
     st.divider()
-    time_opt = st.selectbox("时间范围", ["过去 24 小时", "过去 1 周", "过去 1 个月", "不限时间"], index=0)
+    
+    time_opt = st.selectbox("时间范围（绝对严控）", ["过去 24 小时", "过去 1 周", "过去 1 个月", "不限时间"], index=0)
     time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m", "不限时间": None}
     
     st.markdown("**搜外媒请用英文名 (如 Google、Apple)**")
-    sites = st.text_area("重点搜索源", "techcrunch.com\nbloomberg.com/technology\nithome.com\ntheverge.com\nreadhub.cn\n36kr.com", height=130)
+    sites = st.text_area("重点搜索源", "techcrunch.com\nbloomberg.com\ntechnology\nithome.com\ntheverge.com\nreadhub.cn\n36kr.com", height=130)
     file_name = st.text_input("文件名", f"深度研报_{datetime.date.today()}")
 
-st.title("🐳 企业情报探员 (云端制霸版)")
-query_input = st.text_input("输入主题 (用 \\ 隔开，外媒源建议用英文如：Google \\ Apple)", "Google \\ 微软")
+st.title("🐳 企业情报探员 (纯净排版升级版)")
+query_input = st.text_input("输入主题 (用 \\ 隔开，外媒源建议用英文如：Google \\ Apple)", "Google \\ OpenAI \\ Anthropic")
 btn = st.button("🚀 开始生成研报", type="primary")
 
 if btn:
-    if not api_key:
-        st.error("❌ 请填入 DeepSeek API Key！")
+    # 🔴 拦截未填 API 的情况
+    if not api_key or not tavily_key:
+        st.error("❌ 请先在左侧边栏填入 DeepSeek 和 Tavily 的 API Key！")
     elif not query_input:
         st.warning("请输入关键词！")
     else:
@@ -282,36 +286,56 @@ if btn:
         all_data = []
         ai = EnterpriseDeepSeekDriver(api_key, model_id)
         current_date_str = datetime.date.today().strftime("%Y年%m月%d日")
+        
+        global_seen_titles = []
 
-        st.info("🚀 探员已极速出击，正在突破云端封锁网络...")
+        st.info("🚀 探员已出击，Tavily 企业级检索正在运行...")
 
         for topic in topics:
-            st.markdown(f"#### 🔵 追踪目标: 【{topic}】")
+            st.markdown(f"#### 🔵 追踪目标: 【{topic}】 (要求: {time_opt})")
             
             with st.spinner(f"正在全网搜寻关于【{topic}】的最新线索..."):
-                # 传入 Tavily Key
                 links = search_web(topic, sites, time_limit_dict[time_opt], tavily_key=tavily_key)
             
             if not links: 
-                st.warning(f"⚠️ {topic}：遭遇云端极端拦截，所有免费备用通道均失效。请在左侧边栏填入【Tavily Search API】即可 100% 解决此问题！")
+                st.warning(f"⚠️ {topic}：在严格的【{time_opt}】限制内未搜寻到新闻。说明目标近期很安静！")
                 continue
                 
-            st.write(f"🔍 成功截获 {len(links)} 个关键网址，启动智能爬虫...")
+            st.write(f"🔍 成功截获 {len(links)} 个相关网址，启动智能爬虫...")
 
             with st.spinner(f"正在并发抓取并提纯这 {len(links)} 个网页的正文..."):
                 full_text_data, valid_count = safe_run_async_crawler(urls=[r['href'] for r in links])
 
             if full_text_data:
-                st.write(f"🧠 成功提取 {valid_count} 个纯净网页。DeepSeek 正在执行精密分析（约耗时10-30秒）...")
+                st.write(f"🧠 成功提取 {valid_count} 个纯净网页。DeepSeek 正在执行清洗与排版归纳...")
                 
-                with st.spinner("AI 正在冷酷清洗并提炼精华..."):
+                with st.spinner("AI 正在剔除旧闻与重复项，撰写商业分析..."):
                     final_news_list = map_reduce_analysis(ai, topic, full_text_data, current_date_str, time_opt)
                 
                 if final_news_list:
-                    all_data.append({"topic": topic, "data": final_news_list})
-                    st.success(f"✅ 【{topic}】分析完毕！已为您锁定 {len(final_news_list)} 条高能商业情报。")
+                    deduped_news = []
+                    for news in final_news_list:
+                        is_duplicate = False
+                        for seen_title in global_seen_titles:
+                            similarity = difflib.SequenceMatcher(None, news.title, seen_title).ratio()
+                            if similarity > 0.6:
+                                is_duplicate = True
+                                break
+                        
+                        if not is_duplicate:
+                            deduped_news.append(news)
+                            global_seen_titles.append(news.title)
+                    
+                    if deduped_news:
+                        all_data.append({"topic": topic, "data": deduped_news})
+                        filtered_count = len(final_news_list) - len(deduped_news)
+                        st.success(f"✅ 【{topic}】分析完毕！已锁定 {len(deduped_news)} 条新鲜情报。" + 
+                                   (f"(已跨主题去重过滤 {filtered_count} 条重复事件)" if filtered_count > 0 else ""))
+                    else:
+                        st.warning(f"⚠️ 【{topic}】提炼出的新闻均与之前的主题高度重合，已执行全局去重抹杀！")
+                        
                 else:
-                    st.warning(f"⚠️ 【{topic}】的内容经 AI 过滤后，均未通过您的“生死红线”标准。")
+                    st.warning(f"⚠️ 【{topic}】搜到的网页经 AI 严格审判，全被判定为旧闻或非核心新闻，已执行抹杀过滤。")
             else:
                 st.error(f"❌ 网页抓取失败或正文均为空，目标网站反爬拦截。")
             
@@ -320,8 +344,8 @@ if btn:
         if all_data:
             path = generate_word(all_data, file_name, model_id)
             st.balloons()
-            st.success("🎉 全链条任务执行完毕！")
+            st.success("🎉 全链条任务执行完毕！请下载查看最新高级排版研报。")
             with open(path, "rb") as f:
-                st.download_button("📥 立即下载中文深度研报 (Word)", f, file_name=path, type="primary")
+                st.download_button("📥 立即下载精美排版研报 (Word)", f, file_name=path, type="primary")
         else:
-            st.error("❌ 任务结束。未能生成研报。强烈建议使用 Tavily API 获取无敌搜索能力。")
+            st.error(f"❌ 任务结束。在严格的时效与去重约束下，所有关键词均未产生独立且有效的大事件情报。")
