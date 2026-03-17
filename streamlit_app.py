@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import concurrent.futures
 import datetime
+import os
 
 import streamlit as st
 
@@ -17,6 +18,11 @@ if "report_ready" not in st.session_state:
     st.session_state.report_ready = False
     st.session_state.word_path = ""
     st.session_state.ppt_path = ""
+    st.session_state.word_bytes = None
+    st.session_state.ppt_bytes = None
+    st.session_state.word_name = ""
+    st.session_state.ppt_name = ""
+    st.session_state.last_error = ""
 
 
 with st.sidebar:
@@ -61,6 +67,9 @@ if not st.session_state.report_ready:
             process_container = st.empty()
             with process_container.container():
                 topics = [t.strip() for t in query_input.split("\\") if t.strip()]
+                if not topics:
+                    st.warning("请至少输入一个追踪对象。")
+                    st.stop()
 
                 ai = AI_Driver(api_key, model_id)
                 current_date_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -73,6 +82,7 @@ if not st.session_state.report_ready:
                 st.info(f"并发处理启动中，目标数: {len(topics)}")
 
                 results = []
+                errors = []
                 with st.spinner("并发收集与深度推演中..."):
                     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                         futures = [
@@ -92,25 +102,43 @@ if not st.session_state.report_ready:
                             for i, t in enumerate(topics)
                         ]
                         for future in concurrent.futures.as_completed(futures):
-                            results.append(future.result())
+                            try:
+                                results.append(future.result())
+                            except Exception as e:
+                                errors.append(str(e))
 
                 results.sort(key=lambda x: x[0])
                 all_deep_data = [r[1] for r in results if r[1] is not None]
                 all_timeline_data = [r[2] for r in results if r[2] is not None]
 
+                if errors:
+                    st.error("部分任务执行失败，已跳过出错目标。")
                 st.success("并发分析完成")
                 if gh_token and gist_id:
                     mem_manager.save_memory()
 
             if all_deep_data or all_timeline_data:
-                st.session_state.word_path = generate_word(
-                    all_deep_data, all_timeline_data, file_name, model_id
-                )
-                st.session_state.ppt_path = generate_ppt(
-                    all_deep_data, all_timeline_data, file_name, model_id
-                )
-                st.session_state.report_ready = True
-                st.rerun()
+                try:
+                    st.session_state.word_path = generate_word(
+                        all_deep_data, all_timeline_data, file_name, model_id
+                    )
+                    st.session_state.ppt_path = generate_ppt(
+                        all_deep_data, all_timeline_data, file_name, model_id
+                    )
+                    with open(st.session_state.word_path, "rb") as f:
+                        st.session_state.word_bytes = f.read()
+                    with open(st.session_state.ppt_path, "rb") as f:
+                        st.session_state.ppt_bytes = f.read()
+                    st.session_state.word_name = os.path.basename(st.session_state.word_path)
+                    st.session_state.ppt_name = os.path.basename(st.session_state.ppt_path)
+                    st.session_state.report_ready = True
+                    st.session_state.last_error = ""
+                    st.rerun()
+                except Exception as e:
+                    st.session_state.last_error = str(e)
+                    st.error(f"报告生成失败：{e}")
+            else:
+                st.warning("未生成任何有效结果。")
 
     with tab2:
         st.markdown("宏观行业多路扫描，一键生成日报。")
@@ -129,6 +157,7 @@ if not st.session_state.report_ready:
                 st.info("全域扫描启动中，请稍候...")
 
                 results = []
+                errors = []
                 with st.spinner("多路探针聚合中..."):
                     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                         futures = [
@@ -147,46 +176,72 @@ if not st.session_state.report_ready:
                             for i, t in enumerate(INDUSTRY_TOPICS)
                         ]
                         for future in concurrent.futures.as_completed(futures):
-                            results.append(future.result())
+                            try:
+                                results.append(future.result())
+                            except Exception as e:
+                                errors.append(str(e))
 
                 results.sort(key=lambda x: x[0])
                 all_deep_data = [r[1] for r in results if r[1] is not None]
                 all_timeline_data = [r[2] for r in results if r[2] is not None]
 
             if all_deep_data or all_timeline_data:
-                st.session_state.word_path = generate_word(
-                    all_deep_data, all_timeline_data, file_name, model_id
-                )
-                st.session_state.ppt_path = generate_ppt(
-                    all_deep_data, all_timeline_data, file_name, model_id
-                )
-                st.session_state.report_ready = True
-                st.rerun()
+                if errors:
+                    st.error("部分任务执行失败，已跳过出错主题。")
+                try:
+                    st.session_state.word_path = generate_word(
+                        all_deep_data, all_timeline_data, file_name, model_id
+                    )
+                    st.session_state.ppt_path = generate_ppt(
+                        all_deep_data, all_timeline_data, file_name, model_id
+                    )
+                    with open(st.session_state.word_path, "rb") as f:
+                        st.session_state.word_bytes = f.read()
+                    with open(st.session_state.ppt_path, "rb") as f:
+                        st.session_state.ppt_bytes = f.read()
+                    st.session_state.word_name = os.path.basename(st.session_state.word_path)
+                    st.session_state.ppt_name = os.path.basename(st.session_state.ppt_path)
+                    st.session_state.report_ready = True
+                    st.session_state.last_error = ""
+                    st.rerun()
+                except Exception as e:
+                    st.session_state.last_error = str(e)
+                    st.error(f"报告生成失败：{e}")
+            else:
+                st.warning("未生成任何有效结果。")
 
 else:
     st.success("战报生成完成")
+    if not st.session_state.word_bytes or not st.session_state.ppt_bytes:
+        st.error("报告文件丢失或未生成成功，请重新生成。")
+        st.session_state.report_ready = False
+        st.stop()
+
     col1, col2 = st.columns(2)
     with col1:
-        with open(st.session_state.word_path, "rb") as f:
-            st.download_button(
-                "下载 Word 报告",
-                f,
-                file_name=st.session_state.word_path,
-                type="secondary",
-                use_container_width=True,
-            )
+        st.download_button(
+            "下载 Word 报告",
+            data=st.session_state.word_bytes,
+            file_name=st.session_state.word_name or "report.docx",
+            type="secondary",
+            use_container_width=True,
+        )
     with col2:
-        with open(st.session_state.ppt_path, "rb") as f:
-            st.download_button(
-                "下载 PPT 报告",
-                f,
-                file_name=st.session_state.ppt_path,
-                type="primary",
-                use_container_width=True,
-            )
+        st.download_button(
+            "下载 PPT 报告",
+            data=st.session_state.ppt_bytes,
+            file_name=st.session_state.ppt_name or "report.pptx",
+            type="primary",
+            use_container_width=True,
+        )
     st.divider()
     if st.button("开启新一轮分析", use_container_width=True):
         st.session_state.report_ready = False
         st.session_state.word_path = ""
         st.session_state.ppt_path = ""
+        st.session_state.word_bytes = None
+        st.session_state.ppt_bytes = None
+        st.session_state.word_name = ""
+        st.session_state.ppt_name = ""
+        st.session_state.last_error = ""
         st.rerun()
