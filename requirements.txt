@@ -1,7 +1,0 @@
-streamlit
-openai
-pydantic
-langchain-text-splitters
-python-docx
-python-pptx
-crawl4ai
