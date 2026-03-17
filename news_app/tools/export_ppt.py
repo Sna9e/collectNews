@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import datetime
 import os
+import tempfile
 from pathlib import Path
 
 from pptx import Presentation
@@ -224,6 +225,6 @@ def generate_ppt(data, timeline_data, filename, model_name):
                 except Exception:
                     pass
 
-    path = f"{filename}.pptx"
+    path = os.path.join(tempfile.gettempdir(), f"{filename}.pptx")
     prs.save(path)
     return path

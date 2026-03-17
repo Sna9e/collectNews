@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import datetime
+import os
+import tempfile
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -72,6 +74,6 @@ def generate_word(data, timeline_data, filename, model_name):
             divider.alignment = WD_ALIGN_PARAGRAPH.CENTER
             divider.runs[0].font.color.rgb = RGBColor(200, 200, 200)
 
-    path = f"{filename}.docx"
+    path = os.path.join(tempfile.gettempdir(), f"{filename}.docx")
     doc.save(path)
     return path
