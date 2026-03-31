@@ -232,6 +232,33 @@ def collect_source_material(raw_results, max_urls, jina_key):
 
 
 
+def build_empty_section_payload(topic, warnings=None, freshness_stats=None, focus_tags=None):
+    warnings = list(warnings or [])
+    freshness_stats = freshness_stats or {}
+    focus_tags = list(focus_tags or [])
+    empty_deep = {
+        "topic": topic,
+        "data": [],
+        "finance": {},
+        "source_mode": "filtered_empty",
+        "crawler_valid_count": 0,
+        "warnings": warnings,
+        "extraction_stats": {},
+        "freshness_stats": freshness_stats,
+        "focus_tags": focus_tags,
+    }
+    empty_timeline = {
+        "topic": topic,
+        "events": [],
+        "warnings": warnings,
+        "extraction_stats": {},
+        "freshness_stats": freshness_stats,
+        "focus_tags": focus_tags,
+    }
+    return empty_deep, empty_timeline
+
+
+
 def store_report_outputs(all_deep_data, all_timeline_data, export_name, model_name):
     linked_deep_data, linked_timeline_data = annotate_report_data(all_deep_data, all_timeline_data)
     st.session_state.report_data = linked_deep_data
@@ -513,7 +540,12 @@ if not st.session_state.report_ready:
                         current_dt,
                     )
                     if not raw_results:
-                        return index, None, None
+                        deep_empty, timeline_empty = build_empty_section_payload(
+                            topic,
+                            warnings=freshness_warnings,
+                            freshness_stats=freshness_stats,
+                        )
+                        return index, deep_empty, timeline_empty
 
                     history_hint = mem_manager.get_event_bank_summary(topic)
                     event_blueprints = build_event_blueprints(
@@ -675,7 +707,13 @@ if not st.session_state.report_ready:
                         current_dt,
                     )
                     if not top_results:
-                        return index, None, None
+                        deep_empty, timeline_empty = build_empty_section_payload(
+                            topic_label,
+                            warnings=freshness_warnings,
+                            freshness_stats=freshness_stats,
+                            focus_tags=topic_pack.get("tags", []),
+                        )
+                        return index, deep_empty, timeline_empty
                     topic_key = topic_pack["title"]
                     topic_label = f"{topic_key}（中国专题）" if china_mode else topic_key
                     focus_hint = build_focus_hint(topic_pack, china_mode=china_mode)
@@ -832,6 +870,7 @@ else:
     if st.button("📧 开启新一轮情报探索", use_container_width=True):
         reset_report_state()
         st.rerun()
+
 
 
 
