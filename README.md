@@ -1,2 +1,0 @@
-# News
-collect last news
