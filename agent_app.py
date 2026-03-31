@@ -206,6 +206,44 @@ def dedupe_news_items(news_items):
 
 
 
+def sort_results_by_recency(results):
+    return sorted(
+        list(results or []),
+        key=lambda item: item.get("published_at_resolved") or item.get("published_date") or "",
+        reverse=True,
+    )
+
+
+
+def build_company_queries(topic):
+    topic = (topic or "").strip()
+    if not topic:
+        return []
+    return [
+        topic,
+        f"{topic} AI product launch partnership acquisition latest",
+        f"{topic} earnings guidance regulation lawsuit antitrust latest",
+        f"{topic} chip supply chain developer conference data center latest",
+    ]
+
+
+
+def collect_company_search_results(topic, sites_text, time_flag, tavily_key):
+    merged_results = []
+    seen_urls = set()
+    for query in build_company_queries(topic):
+        batch = search_web(query, sites_text, time_flag, max_results=12, tavily_key=tavily_key)
+        for item in batch or []:
+            url = item.get("url")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            merged_results.append(item)
+    return merged_results
+
+
+
 def collect_source_material(raw_results, max_urls, jina_key):
     urls_to_scrape = [item.get("url") for item in raw_results if item.get("url")][:max_urls]
     title_lookup, snippet_lookup = build_lookup_maps(raw_results)
@@ -531,7 +569,7 @@ if not st.session_state.report_ready:
 
             def process_company_task(topic, index):
                 try:
-                    raw_results = search_web(topic, sites, time_limit_dict[time_opt], max_results=20, tavily_key=tavily_key)
+                    raw_results = collect_company_search_results(topic, sites, time_limit_dict[time_opt], tavily_key)
                     if not raw_results:
                         return index, None, None
                     raw_results, freshness_stats, freshness_warnings = audit_results_for_freshness(
@@ -539,6 +577,7 @@ if not st.session_state.report_ready:
                         time_limit_dict[time_opt],
                         current_dt,
                     )
+                    raw_results = sort_results_by_recency(raw_results)[:30]
                     if not raw_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic,
@@ -559,7 +598,7 @@ if not st.session_state.report_ready:
                     event_blueprints = mem_manager.bind_event_blueprints(topic, event_blueprints, current_date_str)
                     timeline_events = generate_timeline(event_blueprints)
 
-                    crawl_result = collect_source_material(raw_results, max_urls=10, jina_key=jina_key)
+                    crawl_result = collect_source_material(raw_results, max_urls=14, jina_key=jina_key)
                     crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(freshness_warnings)
                     past_memories = mem_manager.get_topic_context(topic)
                     final_news_list, new_insight = map_reduce_analysis(
@@ -706,6 +745,7 @@ if not st.session_state.report_ready:
                         time_limit_dict[time_opt],
                         current_dt,
                     )
+                    top_results = sort_results_by_recency(top_results)[:30]
                     if not top_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic_label,
@@ -870,6 +910,8 @@ else:
     if st.button("📧 开启新一轮情报探索", use_container_width=True):
         reset_report_state()
         st.rerun()
+
+
 
 
 
