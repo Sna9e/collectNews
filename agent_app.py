@@ -13,6 +13,12 @@ from agents.timeline_agent import build_event_blueprints, generate_timeline
 from tools.export_ppt import generate_ppt
 from tools.export_word import generate_word
 from tools.finance_engine import fetch_financial_data
+from tools.company_query_packs import (
+    build_company_focus_hint,
+    build_company_queries_from_pack,
+    get_company_query_pack,
+    rank_results_by_company_pack,
+)
 from tools.intelligence_packs import (
     build_focus_hint,
     get_default_china_sites_text,
@@ -215,24 +221,14 @@ def sort_results_by_recency(results):
 
 
 
-def build_company_queries(topic):
-    topic = (topic or "").strip()
-    if not topic:
-        return []
-    return [
-        topic,
-        f"{topic} AI product launch partnership acquisition latest",
-        f"{topic} earnings guidance regulation lawsuit antitrust latest",
-        f"{topic} chip supply chain developer conference data center latest",
-    ]
-
-
-
-def collect_company_search_results(topic, sites_text, time_flag, tavily_key):
+def collect_company_search_results(topic, sites_text, time_flag, tavily_key, company_pack=None):
+    company_pack = company_pack or get_company_query_pack(topic)
     merged_results = []
     seen_urls = set()
-    for query in build_company_queries(topic):
-        batch = search_web(query, sites_text, time_flag, max_results=12, tavily_key=tavily_key)
+    effective_sites = merge_sites_text(sites_text, company_pack.get("domains", []))
+    per_query_limit = 14 if company_pack.get("id") != "generic" else 12
+    for query in build_company_queries_from_pack(topic, company_pack):
+        batch = search_web(query, effective_sites, time_flag, max_results=per_query_limit, tavily_key=tavily_key)
         for item in batch or []:
             url = item.get("url")
             if url and url in seen_urls:
@@ -240,7 +236,8 @@ def collect_company_search_results(topic, sites_text, time_flag, tavily_key):
             if url:
                 seen_urls.add(url)
             merged_results.append(item)
-    return merged_results
+    rank_limit = 48 if company_pack.get("id") != "generic" else 36
+    return rank_results_by_company_pack(merged_results, company_pack, limit=rank_limit)
 
 
 
@@ -569,20 +566,36 @@ if not st.session_state.report_ready:
 
             def process_company_task(topic, index):
                 try:
-                    raw_results = collect_company_search_results(topic, sites, time_limit_dict[time_opt], tavily_key)
+                    company_pack = get_company_query_pack(topic)
+                    focus_tags = company_pack.get("keywords", [])[:8]
+                    company_focus_hint = build_company_focus_hint(company_pack)
+                    raw_results = collect_company_search_results(
+                        topic,
+                        sites,
+                        time_limit_dict[time_opt],
+                        tavily_key,
+                        company_pack=company_pack,
+                    )
                     if not raw_results:
-                        return index, None, None
+                        empty_warning = f"未召回到符合条件的 {topic} 新闻，请扩大搜索源或放宽时间范围。"
+                        deep_empty, timeline_empty = build_empty_section_payload(
+                            topic,
+                            warnings=[empty_warning],
+                            focus_tags=focus_tags,
+                        )
+                        return index, deep_empty, timeline_empty
                     raw_results, freshness_stats, freshness_warnings = audit_results_for_freshness(
                         raw_results,
                         time_limit_dict[time_opt],
                         current_dt,
                     )
-                    raw_results = sort_results_by_recency(raw_results)[:30]
+                    raw_results = rank_results_by_company_pack(raw_results, company_pack, limit=30)
                     if not raw_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic,
                             warnings=freshness_warnings,
                             freshness_stats=freshness_stats,
+                            focus_tags=focus_tags,
                         )
                         return index, deep_empty, timeline_empty
 
@@ -594,11 +607,13 @@ if not st.session_state.report_ready:
                         current_date_str,
                         time_opt,
                         history_hint=history_hint,
+                        guidance=company_focus_hint,
                     )
                     event_blueprints = mem_manager.bind_event_blueprints(topic, event_blueprints, current_date_str)
                     timeline_events = generate_timeline(event_blueprints)
 
-                    crawl_result = collect_source_material(raw_results, max_urls=14, jina_key=jina_key)
+                    crawl_limit = 18 if company_pack.get("id") != "generic" else 14
+                    crawl_result = collect_source_material(raw_results, max_urls=crawl_limit, jina_key=jina_key)
                     crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(freshness_warnings)
                     past_memories = mem_manager.get_topic_context(topic)
                     final_news_list, new_insight = map_reduce_analysis(
@@ -610,6 +625,7 @@ if not st.session_state.report_ready:
                         past_memories,
                         event_blueprints=event_blueprints,
                         source_mode=crawl_result["source_mode"],
+                        guidance=company_focus_hint,
                     )
 
                     deep_data_res = None
@@ -637,6 +653,7 @@ if not st.session_state.report_ready:
                                 "warnings": list(crawl_result.get("warnings", [])),
                                 "extraction_stats": crawl_result.get("stats", {}),
                                 "freshness_stats": freshness_stats,
+                                "focus_tags": focus_tags,
                             }
                             if new_insight:
                                 mem_manager.add_topic_memory(topic, current_date_str, new_insight)
@@ -647,6 +664,7 @@ if not st.session_state.report_ready:
                         "warnings": list(crawl_result.get("warnings", [])),
                         "extraction_stats": crawl_result.get("stats", {}),
                         "freshness_stats": freshness_stats,
+                        "focus_tags": focus_tags,
                     } if timeline_events else None
                     return index, deep_data_res, timeline_data_res
                 except Exception as e:
@@ -910,6 +928,7 @@ else:
     if st.button("📧 开启新一轮情报探索", use_container_width=True):
         reset_report_state()
         st.rerun()
+
 
 
 
