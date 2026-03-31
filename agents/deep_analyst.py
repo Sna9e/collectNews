@@ -129,6 +129,7 @@ def map_reduce_analysis(
     past_memories_string="",
     event_blueprints=None,
     source_mode="full_text",
+    guidance="",
 ):
     if not full_text or len(full_text) < 100:
         return [], ""
@@ -152,6 +153,7 @@ def map_reduce_analysis(
             "当前输入不是全文抓取，而是搜索摘要降级模式。禁止伪造原文引语、精细动作、独家细节或未出现的数据；"
             "信息不足时要明确写成‘现有摘要显示’。"
         )
+    guidance_block = f"\n        【专题聚焦要求】：\n        {guidance}\n" if guidance else ""
 
     event_constraint_text = ""
     if has_event_blueprints:
@@ -171,6 +173,7 @@ def map_reduce_analysis(
         任务：提取关于【{topic}】的新闻情报候选。
         红线：发现早于要求时间的旧闻直接丢弃！【{topic}】必须是绝对主角！无符合条件必须返回空的 news 数组。
         {source_mode_note}
+        {guidance_block}
         {event_constraint_text}
         文本：{doc.page_content}
         """
@@ -232,6 +235,7 @@ def map_reduce_analysis(
 
         {event_reduce_text}
         {source_mode_note}
+        {guidance_block}
 
         任务：
         1. 终极剔除旧闻。2. 合并同事件新闻。
