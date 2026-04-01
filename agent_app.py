@@ -202,12 +202,30 @@ def build_lookup_maps(raw_results):
 
 def dedupe_news_items(news_items):
     deduped_news = []
-    seen_keys = []
+    seen_event_ids = set()
+    seen_urls = set()
+    seen_title_keys = []
     for news in news_items or []:
-        dedupe_key = getattr(news, "event_id", "") or getattr(news, "title", "")
-        if not any(difflib.SequenceMatcher(None, dedupe_key, existing).ratio() > 0.6 for existing in seen_keys):
-            deduped_news.append(news)
-            seen_keys.append(dedupe_key)
+        event_id = getattr(news, "event_id", "") or ""
+        url = getattr(news, "url", "") or ""
+        title = getattr(news, "title", "") or ""
+        date_check = getattr(news, "date_check", "") or ""
+        source = getattr(news, "source", "") or ""
+        title_key = f"{title}|{date_check}|{source}"
+
+        if event_id and event_id in seen_event_ids:
+            continue
+        if url and url in seen_urls:
+            continue
+        if any(difflib.SequenceMatcher(None, title_key, existing).ratio() > 0.82 for existing in seen_title_keys):
+            continue
+
+        deduped_news.append(news)
+        if event_id:
+            seen_event_ids.add(event_id)
+        if url:
+            seen_urls.add(url)
+        seen_title_keys.append(title_key)
     return deduped_news
 
 
@@ -218,6 +236,15 @@ def sort_results_by_recency(results):
         key=lambda item: item.get("published_at_resolved") or item.get("published_date") or "",
         reverse=True,
     )
+
+
+def should_show_matched_title(event_text, matched_title):
+    left = str(event_text or "").strip().lower()
+    right = str(matched_title or "").strip().lower()
+    if not left or not right:
+        return bool(right)
+    ratio = difflib.SequenceMatcher(None, left, right).ratio()
+    return ratio < 0.72 and left not in right and right not in left
 
 
 
@@ -382,8 +409,11 @@ def render_timeline_preview(timeline_data):
 
             detail_html = ""
             if appears_later:
+                matched_news_line = "已在后续长新闻中展开"
+                if should_show_matched_title(event_text, matched_title):
+                    matched_news_line = matched_title
                 detail_html = (
-                    f"<div style='margin-top:8px;color:#7c2d12;'><strong>对应长新闻：</strong>{matched_title}</div>"
+                    f"<div style='margin-top:8px;color:#7c2d12;'><strong>对应长新闻：</strong>{matched_news_line}</div>"
                     f"<div style='margin-top:4px;color:#7c2d12;'><strong>出现原因：</strong>{match_reason}</div>"
                 )
 
@@ -632,6 +662,7 @@ if not st.session_state.report_ready:
                         event_blueprints=event_blueprints,
                         source_mode=crawl_result["source_mode"],
                         guidance=company_focus_hint,
+                        raw_search_results=raw_results,
                     )
 
                     deep_data_res = None
@@ -810,6 +841,7 @@ if not st.session_state.report_ready:
                             f"{focus_hint}；仅保留中国公司或中国产业链相关事件，来源必须来自中文站点。"
                             if china_mode else focus_hint
                         ),
+                        raw_search_results=top_results,
                     )
 
                     deep_data_res = None
@@ -934,6 +966,8 @@ else:
     if st.button("📧 开启新一轮情报探索", use_container_width=True):
         reset_report_state()
         st.rerun()
+
+
 
 
 
