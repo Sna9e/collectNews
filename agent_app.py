@@ -225,8 +225,14 @@ def collect_company_search_results(topic, sites_text, time_flag, tavily_key, com
     company_pack = company_pack or get_company_query_pack(topic)
     merged_results = []
     seen_urls = set()
-    effective_sites = merge_sites_text(sites_text, company_pack.get("domains", []))
-    per_query_limit = 14 if company_pack.get("id") != "generic" else 12
+    normalized_sites_text = str(sites_text or "").strip()
+    default_sites_text = str(get_default_sites_text() or "").strip()
+    use_custom_domain_filter = bool(normalized_sites_text) and normalized_sites_text != default_sites_text
+    effective_sites = (
+        merge_sites_text(normalized_sites_text, company_pack.get("domains", []))
+        if use_custom_domain_filter else ""
+    )
+    per_query_limit = 18 if company_pack.get("id") != "generic" else 16
     for query in build_company_queries_from_pack(topic, company_pack):
         batch = search_web(query, effective_sites, time_flag, max_results=per_query_limit, tavily_key=tavily_key)
         for item in batch or []:
@@ -236,7 +242,7 @@ def collect_company_search_results(topic, sites_text, time_flag, tavily_key, com
             if url:
                 seen_urls.add(url)
             merged_results.append(item)
-    rank_limit = 48 if company_pack.get("id") != "generic" else 36
+    rank_limit = 60 if company_pack.get("id") != "generic" else 48
     return rank_results_by_company_pack(merged_results, company_pack, limit=rank_limit)
 
 
@@ -589,7 +595,7 @@ if not st.session_state.report_ready:
                         time_limit_dict[time_opt],
                         current_dt,
                     )
-                    raw_results = rank_results_by_company_pack(raw_results, company_pack, limit=30)
+                    raw_results = rank_results_by_company_pack(raw_results, company_pack, limit=40)
                     if not raw_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic,
@@ -612,7 +618,7 @@ if not st.session_state.report_ready:
                     event_blueprints = mem_manager.bind_event_blueprints(topic, event_blueprints, current_date_str)
                     timeline_events = generate_timeline(event_blueprints)
 
-                    crawl_limit = 18 if company_pack.get("id") != "generic" else 14
+                    crawl_limit = 22 if company_pack.get("id") != "generic" else 18
                     crawl_result = collect_source_material(raw_results, max_urls=crawl_limit, jina_key=jina_key)
                     crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(freshness_warnings)
                     past_memories = mem_manager.get_topic_context(topic)
@@ -730,6 +736,8 @@ if not st.session_state.report_ready:
 
             def process_industry_task(topic_pack, index):
                 try:
+                    topic_key = topic_pack["title"]
+                    topic_label = f"{topic_key}（中国专题）" if china_mode else topic_key
                     all_raw_results = []
                     seen_urls = set()
                     extra_domains = topic_pack.get("china_domains", []) if china_mode else topic_pack.get("domains", [])
@@ -741,12 +749,12 @@ if not st.session_state.report_ready:
                             actual_query,
                             effective_domains,
                             time_limit_dict[time_opt],
-                            max_results=12,
+                            max_results=16,
                             tavily_key=tavily_key,
                         )
                         if china_mode:
                             results = filter_china_results(results, effective_domains, require_chinese_text=True)
-                        results = rank_results_by_pack(results, topic_pack, limit=10)
+                        results = rank_results_by_pack(results, topic_pack, limit=12)
 
                         for item in results:
                             url = item.get("url")
@@ -757,13 +765,13 @@ if not st.session_state.report_ready:
                     if not all_raw_results:
                         return index, None, None
 
-                    top_results = rank_results_by_pack(all_raw_results, topic_pack, limit=20)
+                    top_results = rank_results_by_pack(all_raw_results, topic_pack, limit=30)
                     top_results, freshness_stats, freshness_warnings = audit_results_for_freshness(
                         top_results,
                         time_limit_dict[time_opt],
                         current_dt,
                     )
-                    top_results = sort_results_by_recency(top_results)[:30]
+                    top_results = rank_results_by_pack(top_results, topic_pack, limit=30)
                     if not top_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic_label,
@@ -772,8 +780,6 @@ if not st.session_state.report_ready:
                             focus_tags=topic_pack.get("tags", []),
                         )
                         return index, deep_empty, timeline_empty
-                    topic_key = topic_pack["title"]
-                    topic_label = f"{topic_key}（中国专题）" if china_mode else topic_key
                     focus_hint = build_focus_hint(topic_pack, china_mode=china_mode)
                     history_hint = mem_manager.get_event_bank_summary(topic_key)
                     event_blueprints = build_event_blueprints(
@@ -788,22 +794,22 @@ if not st.session_state.report_ready:
                     event_blueprints = mem_manager.bind_event_blueprints(topic_key, event_blueprints, current_date_str)
                     timeline_events = generate_timeline(event_blueprints)
 
-                    crawl_result = collect_source_material(top_results, max_urls=12, jina_key=jina_key)
+                    crawl_result = collect_source_material(top_results, max_urls=16, jina_key=jina_key)
                     crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(freshness_warnings)
-                    strict_topic_prompt = f"{topic_key}。核心提取要求：{focus_hint}"
-                    if china_mode:
-                        strict_topic_prompt += "。仅保留中国公司或中国产业链相关事件，来源必须来自中文站点。"
-
                     past_memories = mem_manager.get_topic_context(topic_key)
                     final_news_list, _ = map_reduce_analysis(
                         ai,
-                        strict_topic_prompt,
+                        topic_key,
                         crawl_result["content"],
                         current_date_str,
                         time_opt,
                         past_memories,
                         event_blueprints=event_blueprints,
                         source_mode=crawl_result["source_mode"],
+                        guidance=(
+                            f"{focus_hint}；仅保留中国公司或中国产业链相关事件，来源必须来自中文站点。"
+                            if china_mode else focus_hint
+                        ),
                     )
 
                     deep_data_res = None
