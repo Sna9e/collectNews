@@ -4,6 +4,7 @@ import difflib
 import html
 import json
 import re
+import traceback
 
 import streamlit as st
 from openai import OpenAI
@@ -468,6 +469,16 @@ def build_empty_section_payload(topic, warnings=None, freshness_stats=None, focu
 
 
 
+def build_error_section_payload(topic, error_text, freshness_stats=None, focus_tags=None):
+    return build_empty_section_payload(
+        topic,
+        warnings=[f"专题处理失败：{error_text}"],
+        freshness_stats=freshness_stats,
+        focus_tags=focus_tags,
+    )
+
+
+
 def store_report_outputs(all_deep_data, all_timeline_data, export_name, model_name):
     linked_deep_data, linked_timeline_data = annotate_report_data(all_deep_data, all_timeline_data)
     st.session_state.report_data = linked_deep_data
@@ -859,8 +870,14 @@ if not st.session_state.report_ready:
                     } if timeline_events else None
                     return index, deep_data_res, timeline_data_res
                 except Exception as e:
-                    print(f"⚠️ Company pipeline failed for {topic}: {e}")
-                    return index, None, None
+                    trace_text = traceback.format_exc(limit=8)
+                    print(f"⚠️ Company pipeline failed for {topic}: {trace_text}")
+                    deep_error, timeline_error = build_error_section_payload(
+                        topic,
+                        f"{e.__class__.__name__}: {e}",
+                        focus_tags=locals().get("focus_tags", []),
+                    )
+                    return index, deep_error, timeline_error
 
             results = []
             with st.spinner("🛰️ 正在并行收集与深度推演中..."):
@@ -883,6 +900,8 @@ if not st.session_state.report_ready:
             if all_deep_data or all_timeline_data:
                 store_report_outputs(all_deep_data, all_timeline_data, file_name, model_id)
                 st.rerun()
+            else:
+                st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
 
     with tab2:
         st.markdown(
@@ -1035,8 +1054,16 @@ if not st.session_state.report_ready:
                     } if timeline_events else None
                     return index, deep_data_res, timeline_data_res
                 except Exception as e:
-                    print(f"⚠️ Industry pipeline failed for {topic_pack.get('title', 'unknown')}: {e}")
-                    return index, None, None
+                    topic_label = locals().get("topic_label", topic_pack.get("title", "unknown"))
+                    trace_text = traceback.format_exc(limit=8)
+                    print(f"⚠️ Industry pipeline failed for {topic_label}: {trace_text}")
+                    deep_error, timeline_error = build_error_section_payload(
+                        topic_label,
+                        f"{e.__class__.__name__}: {e}",
+                        freshness_stats=locals().get("freshness_stats", {}),
+                        focus_tags=topic_pack.get("tags", []),
+                    )
+                    return index, deep_error, timeline_error
 
             results = []
             spinner_msg = (
@@ -1072,6 +1099,8 @@ if not st.session_state.report_ready:
             if all_deep_data or all_timeline_data:
                 store_report_outputs(all_deep_data, all_timeline_data, file_name, model_id)
                 st.rerun()
+            else:
+                st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
 
         if start_cn_industry_btn and api_key and tavily_key:
             all_deep_data, all_timeline_data = run_industry_pipeline(
@@ -1083,6 +1112,8 @@ if not st.session_state.report_ready:
             if all_deep_data or all_timeline_data:
                 store_report_outputs(all_deep_data, all_timeline_data, file_name, model_id)
                 st.rerun()
+            else:
+                st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
 
 else:
     if not st.session_state.report_celebrated:
