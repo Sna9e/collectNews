@@ -5,14 +5,7 @@ import html
 import json
 import os
 import re
-import sys
 import traceback
-
-if os.path.basename(str(sys.argv[0] or "")).lower() in {"agent_app.py", "agent_app"}:
-    raise SystemExit(
-        "请不要直接运行 agent_app.py。"
-        " 请改用 `python debug_local.py` 或 `streamlit run agent_app.py` 启动。"
-    )
 
 import streamlit as st
 from openai import OpenAI
