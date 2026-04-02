@@ -3,8 +3,16 @@ import datetime
 import difflib
 import html
 import json
+import os
 import re
+import sys
 import traceback
+
+if os.path.basename(str(sys.argv[0] or "")).lower() in {"agent_app.py", "agent_app"}:
+    raise SystemExit(
+        "请不要直接运行 agent_app.py。"
+        " 请改用 `python debug_local.py` 或 `streamlit run agent_app.py` 启动。"
+    )
 
 import streamlit as st
 from openai import OpenAI
@@ -712,16 +720,21 @@ def render_quality_panel(report_data, timeline_data):
 
 with st.sidebar:
     st.header("🧠 部门情报控制台")
-    try:
-        api_key = st.secrets["DEEPSEEK_API_KEY"]
-        tavily_key = st.secrets["TAVILY_API_KEY"]
-        jina_key = st.secrets.get("JINA_API_KEY", "")
-        gh_token = st.secrets.get("GITHUB_TOKEN", "")
-        gist_id = st.secrets.get("GIST_ID", "")
+    def _get_runtime_secret(name, default=""):
+        try:
+            return st.secrets[name]
+        except Exception:
+            return os.getenv(name, default)
+
+    api_key = _get_runtime_secret("DEEPSEEK_API_KEY", "")
+    tavily_key = _get_runtime_secret("TAVILY_API_KEY", "")
+    jina_key = _get_runtime_secret("JINA_API_KEY", "")
+    gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
+    gist_id = _get_runtime_secret("GIST_ID", "")
+    if api_key and tavily_key:
         st.success("🔐 部门专属安全引擎已连接")
-    except KeyError:
-        st.error("⚠️ 未在云端检测到 Secrets 配置，请联系管理员。")
-        api_key, tavily_key, jina_key, gh_token, gist_id = "", "", "", "", ""
+    else:
+        st.error("⚠️ 未检测到可用的 Secrets / 环境变量，请补充 API Key。")
 
     st.divider()
     model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
