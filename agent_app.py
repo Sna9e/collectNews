@@ -3,6 +3,7 @@ import datetime
 import difflib
 import html
 import json
+import re
 
 import streamlit as st
 from openai import OpenAI
@@ -49,6 +50,12 @@ SESSION_DEFAULTS = {
 }
 
 LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
+EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY = 18
+EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY = 16
+ANALYSIS_EVENT_LIMIT = 8
+COMPANY_CRAWL_URL_LIMIT = 10
+INDUSTRY_CRAWL_URL_LIMIT = 8
+MAX_SOURCE_CHARS_PER_URL = 2400
 
 for session_key, default_value in SESSION_DEFAULTS.items():
     if session_key not in st.session_state:
@@ -238,6 +245,139 @@ def sort_results_by_recency(results):
     )
 
 
+
+def _serialize_event_blueprints(event_blueprints):
+    payload = []
+    for event in event_blueprints or []:
+        if isinstance(event, dict):
+            payload.append(dict(event))
+        elif hasattr(event, "model_dump"):
+            payload.append(event.model_dump())
+    return payload
+
+
+
+def _normalize_match_text(text):
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(text or "").lower().strip())
+
+
+
+def _tokenize_match_text(text):
+    words = {token.lower() for token in re.findall(r"[a-z0-9]{2,}", str(text or "").lower())}
+    chars = [ch for ch in str(text or "") if re.match(r"[\u4e00-\u9fff]", ch)]
+    if len(chars) < 2:
+        return words | set(chars)
+    return words | {"".join(chars[idx:idx + 2]) for idx in range(len(chars) - 1)}
+
+
+
+def _score_result_for_event(event_dict, result):
+    event_text = str(event_dict.get("event", "") or "")
+    keywords = " ".join(event_dict.get("keywords", []) or [])
+    title = str(result.get("title", "") or "")
+    snippet = str(result.get("content", "") or "")[:220]
+    if not event_text.strip():
+        return 0.0
+
+    event_norm = _normalize_match_text(event_text)
+    title_norm = _normalize_match_text(title)
+    ratio = difflib.SequenceMatcher(None, event_norm, title_norm).ratio() if event_norm and title_norm else 0.0
+    event_tokens = _tokenize_match_text(f"{event_text} {keywords}")
+    result_tokens = _tokenize_match_text(f"{title} {snippet}")
+    overlap = len(event_tokens & result_tokens) / max(len(event_tokens), 1)
+    keyword_hits = sum(
+        1
+        for token in event_dict.get("keywords", []) or []
+        if token and str(token).lower() in f"{title} {snippet}".lower()
+    )
+    return round(ratio * 0.52 + overlap * 0.34 + min(keyword_hits * 0.07, 0.21), 4)
+
+
+
+def select_analysis_candidates(event_blueprints, raw_results, max_events=ANALYSIS_EVENT_LIMIT, max_urls=COMPANY_CRAWL_URL_LIMIT):
+    blueprint_payload = _serialize_event_blueprints(event_blueprints)
+    ranked_results = sort_results_by_recency(raw_results)
+    if not blueprint_payload or not ranked_results:
+        return blueprint_payload[:max_events], ranked_results[:max_urls]
+
+    scored_blueprints = []
+    for index, event_dict in enumerate(blueprint_payload):
+        scored_results = []
+        for result in ranked_results:
+            score = _score_result_for_event(event_dict, result)
+            if score >= 0.24:
+                scored_results.append((score, result))
+        if not scored_results:
+            continue
+        scored_results.sort(
+            key=lambda item: (item[0], item[1].get("published_at_resolved") or item[1].get("published_date") or ""),
+            reverse=True,
+        )
+        scored_blueprints.append(
+            {
+                "index": index,
+                "event": event_dict,
+                "results": [item[1] for item in scored_results[:2]],
+                "support_count": len(scored_results),
+                "top_score": scored_results[0][0],
+                "latest_time": max(
+                    (item[1].get("published_at_resolved") or item[1].get("published_date") or "")
+                    for item in scored_results
+                ),
+            }
+        )
+
+    if not scored_blueprints:
+        return blueprint_payload[:max_events], ranked_results[:max_urls]
+
+    scored_blueprints.sort(
+        key=lambda row: (row["support_count"], row["top_score"], row["latest_time"], -row["index"]),
+        reverse=True,
+    )
+    chosen_rows = scored_blueprints[:max_events]
+    chosen_event_ids = {row["event"].get("event_id", "") for row in chosen_rows if row["event"].get("event_id")}
+    if chosen_event_ids:
+        candidate_events = [
+            event_dict for event_dict in blueprint_payload
+            if event_dict.get("event_id", "") in chosen_event_ids
+        ][:max_events]
+    else:
+        chosen_indexes = {row["index"] for row in chosen_rows}
+        candidate_events = [
+            event_dict for idx, event_dict in enumerate(blueprint_payload)
+            if idx in chosen_indexes
+        ][:max_events]
+
+    selected_results = []
+    seen_urls = set()
+    for pass_index in range(2):
+        for row in chosen_rows:
+            if pass_index >= len(row["results"]) or len(selected_results) >= max_urls:
+                continue
+            result = row["results"][pass_index]
+            url = result.get("url", "")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            selected_results.append(result)
+            if len(selected_results) >= max_urls:
+                break
+
+    for result in ranked_results:
+        if len(selected_results) >= max_urls:
+            break
+        url = result.get("url", "")
+        if url and url in seen_urls:
+            continue
+        if url:
+            seen_urls.add(url)
+        selected_results.append(result)
+
+    return candidate_events or blueprint_payload[:max_events], selected_results[:max_urls]
+
+
+
 def should_show_matched_title(event_text, matched_title):
     left = str(event_text or "").strip().lower()
     right = str(matched_title or "").strip().lower()
@@ -274,7 +414,7 @@ def collect_company_search_results(topic, sites_text, time_flag, tavily_key, com
 
 
 
-def collect_source_material(raw_results, max_urls, jina_key):
+def collect_source_material(raw_results, max_urls, jina_key, max_chars_per_source=MAX_SOURCE_CHARS_PER_URL):
     urls_to_scrape = [item.get("url") for item in raw_results if item.get("url")][:max_urls]
     title_lookup, snippet_lookup = build_lookup_maps(raw_results)
     crawl_result = safe_run_async_crawler(
@@ -282,6 +422,7 @@ def collect_source_material(raw_results, max_urls, jina_key):
         jina_key=jina_key,
         snippet_lookup=snippet_lookup,
         title_lookup=title_lookup,
+        max_chars_per_source=max_chars_per_source,
     )
     if not crawl_result.get("content"):
         fallback_snippets = []
@@ -574,6 +715,7 @@ with st.sidebar:
     st.divider()
     model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
     time_opt = st.selectbox("回溯时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
+    enable_finance_chain = st.toggle("上市公司金融补链（更耗 token）", value=False)
     time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m"}
 
     with st.expander("⚙️ 高级搜索源设置"):
@@ -635,10 +777,11 @@ if not st.session_state.report_ready:
                         )
                         return index, deep_empty, timeline_empty
 
-                    history_hint = mem_manager.get_event_bank_summary(topic)
+                    event_seed_results = raw_results[:EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY]
+                    history_hint = mem_manager.get_event_bank_summary(topic, limit=4)
                     event_blueprints = build_event_blueprints(
                         ai,
-                        raw_results,
+                        event_seed_results,
                         topic,
                         current_date_str,
                         time_opt,
@@ -647,11 +790,20 @@ if not st.session_state.report_ready:
                     )
                     event_blueprints = mem_manager.bind_event_blueprints(topic, event_blueprints, current_date_str)
                     timeline_events = generate_timeline(event_blueprints)
-
-                    crawl_limit = 22 if company_pack.get("id") != "generic" else 18
-                    crawl_result = collect_source_material(raw_results, max_urls=crawl_limit, jina_key=jina_key)
+                    analysis_events, analysis_results = select_analysis_candidates(
+                        event_blueprints,
+                        raw_results,
+                        max_events=ANALYSIS_EVENT_LIMIT,
+                        max_urls=COMPANY_CRAWL_URL_LIMIT,
+                    )
+                    crawl_result = collect_source_material(
+                        analysis_results,
+                        max_urls=COMPANY_CRAWL_URL_LIMIT,
+                        jina_key=jina_key,
+                        max_chars_per_source=MAX_SOURCE_CHARS_PER_URL,
+                    )
                     crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(freshness_warnings)
-                    past_memories = mem_manager.get_topic_context(topic)
+                    past_memories = mem_manager.get_topic_context(topic, history_limit=3, event_limit=4)
                     final_news_list, new_insight = map_reduce_analysis(
                         ai,
                         topic,
@@ -659,27 +811,29 @@ if not st.session_state.report_ready:
                         current_date_str,
                         time_opt,
                         past_memories,
-                        event_blueprints=event_blueprints,
+                        event_blueprints=analysis_events,
                         source_mode=crawl_result["source_mode"],
                         guidance=company_focus_hint,
-                        raw_search_results=raw_results,
+                        raw_search_results=analysis_results,
                     )
 
                     deep_data_res = None
                     if final_news_list:
                         deduped_news = dedupe_news_items(final_news_list)
                         if deduped_news:
-                            try:
-                                finance_data = fetch_financial_data(ai, topic) or finance_fallback_payload()
-                            except Exception as e:
-                                print(f"⚠️ Finance chain failed for {topic}: {e}")
-                                finance_data = finance_fallback_payload(f"Finance chain failed: {e}")
+                            finance_data = {}
+                            if enable_finance_chain:
+                                try:
+                                    finance_data = fetch_financial_data(ai, topic) or finance_fallback_payload()
+                                except Exception as e:
+                                    print(f"⚠️ Finance chain failed for {topic}: {e}")
+                                    finance_data = finance_fallback_payload(f"Finance chain failed: {e}")
 
-                            if finance_data.get("is_public"):
-                                news_summary_text = "\n".join([news.summary for news in deduped_news])
-                                cats = get_finance_catalysts(ai, topic, news_summary_text)
-                                if cats:
-                                    finance_data["catalysts"] = cats.model_dump()
+                                if finance_data.get("is_public"):
+                                    news_summary_text = "\n".join([news.summary for news in deduped_news])
+                                    cats = get_finance_catalysts(ai, topic, news_summary_text)
+                                    if cats:
+                                        finance_data["catalysts"] = cats.model_dump()
 
                             deep_data_res = {
                                 "topic": topic,
@@ -812,10 +966,11 @@ if not st.session_state.report_ready:
                         )
                         return index, deep_empty, timeline_empty
                     focus_hint = build_focus_hint(topic_pack, china_mode=china_mode)
-                    history_hint = mem_manager.get_event_bank_summary(topic_key)
+                    event_seed_results = top_results[:EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY]
+                    history_hint = mem_manager.get_event_bank_summary(topic_key, limit=4)
                     event_blueprints = build_event_blueprints(
                         ai,
-                        top_results,
+                        event_seed_results,
                         topic_key,
                         current_date_str,
                         time_opt,
@@ -824,10 +979,20 @@ if not st.session_state.report_ready:
                     )
                     event_blueprints = mem_manager.bind_event_blueprints(topic_key, event_blueprints, current_date_str)
                     timeline_events = generate_timeline(event_blueprints)
-
-                    crawl_result = collect_source_material(top_results, max_urls=16, jina_key=jina_key)
+                    analysis_events, analysis_results = select_analysis_candidates(
+                        event_blueprints,
+                        top_results,
+                        max_events=ANALYSIS_EVENT_LIMIT,
+                        max_urls=INDUSTRY_CRAWL_URL_LIMIT,
+                    )
+                    crawl_result = collect_source_material(
+                        analysis_results,
+                        max_urls=INDUSTRY_CRAWL_URL_LIMIT,
+                        jina_key=jina_key,
+                        max_chars_per_source=MAX_SOURCE_CHARS_PER_URL,
+                    )
                     crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(freshness_warnings)
-                    past_memories = mem_manager.get_topic_context(topic_key)
+                    past_memories = mem_manager.get_topic_context(topic_key, history_limit=3, event_limit=4)
                     final_news_list, _ = map_reduce_analysis(
                         ai,
                         topic_key,
@@ -835,13 +1000,13 @@ if not st.session_state.report_ready:
                         current_date_str,
                         time_opt,
                         past_memories,
-                        event_blueprints=event_blueprints,
+                        event_blueprints=analysis_events,
                         source_mode=crawl_result["source_mode"],
                         guidance=(
                             f"{focus_hint}；仅保留中国公司或中国产业链相关事件，来源必须来自中文站点。"
                             if china_mode else focus_hint
                         ),
-                        raw_search_results=top_results,
+                        raw_search_results=analysis_results,
                     )
 
                     deep_data_res = None
