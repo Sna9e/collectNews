@@ -58,6 +58,7 @@ ANALYSIS_EVENT_LIMIT = 8
 COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
 MAX_SOURCE_CHARS_PER_URL = 2400
+DEFAULT_GEMINI_LIGHT_MODEL = "gemini-2.5-flash-lite"
 
 for session_key, default_value in SESSION_DEFAULTS.items():
     if session_key not in st.session_state:
@@ -65,15 +66,43 @@ for session_key, default_value in SESSION_DEFAULTS.items():
 
 
 class AI_Driver:
-    def __init__(self, api_key, model_id):
+    def __init__(self, api_key, model_id, provider="deepseek"):
         self.valid = False
-        if api_key:
+        self.provider = provider
+        self.model_id = model_id
+        self.base_url = self._resolve_base_url(provider)
+        if api_key and model_id and self.base_url:
             try:
-                self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-                self.model_id = model_id
+                self.client = OpenAI(api_key=api_key, base_url=self.base_url)
                 self.valid = True
             except Exception:
                 pass
+
+    @staticmethod
+    def _resolve_base_url(provider):
+        provider_key = str(provider or "").strip().lower()
+        if provider_key == "gemini":
+            return "https://generativelanguage.googleapis.com/v1beta/openai/"
+        if provider_key == "deepseek":
+            return "https://api.deepseek.com"
+        return ""
+
+    @property
+    def label(self):
+        if self.provider == "gemini":
+            return f"Gemini AI Studio/{self.model_id}"
+        return f"DeepSeek/{self.model_id}"
+
+    def _request_completion(self, messages, force_plain_json=False):
+        request_kwargs = {
+            "model": self.model_id,
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": 4096,
+        }
+        if not force_plain_json:
+            request_kwargs["response_format"] = {"type": "json_object"}
+        return self.client.chat.completions.create(**request_kwargs)
 
     def analyze_structural(self, prompt, structure_class):
         if not self.valid:
@@ -85,16 +114,19 @@ class AI_Driver:
         )
 
         try:
-            res = self.client.chat.completions.create(
-                model=self.model_id,
-                messages=[
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.1,
-                max_tokens=4096,
-            )
+            messages = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": prompt},
+            ]
+            try:
+                res = self._request_completion(messages)
+            except Exception:
+                if self.provider != "gemini":
+                    raise
+                # Gemini OpenAI compatibility is good enough for this workflow,
+                # but some accounts/features can reject json_object. Retry once
+                # with plain text JSON instructions so the toggle remains non-breaking.
+                res = self._request_completion(messages, force_plain_json=True)
             content = res.choices[0].message.content.strip()
             if content.startswith("```"):
                 content = content.strip("`").strip()
@@ -108,6 +140,32 @@ class AI_Driver:
         except Exception as e:
             print(f"⚠️ AI 结构化解析失败: {e}")
             return None
+
+
+def build_ai_stack(deepseek_key, deepseek_model, use_gemini_light=False, gemini_key="", gemini_model=DEFAULT_GEMINI_LIGHT_MODEL):
+    heavy_driver = AI_Driver(deepseek_key, deepseek_model, provider="deepseek")
+    light_driver = heavy_driver
+    notices = []
+
+    if use_gemini_light:
+        gemini_driver = AI_Driver(gemini_key, gemini_model, provider="gemini")
+        if gemini_driver.valid:
+            light_driver = gemini_driver
+            notices.append(
+                f"轻任务引擎已切换到 {light_driver.label}；DeepSeek 继续负责最终成稿和金融分析。"
+            )
+        else:
+            notices.append(
+                "已开启 Gemini AI Studio 轻任务引擎，但当前未检测到可用的 GEMINI_API_KEY / GOOGLE_API_KEY；本次自动回退为全 DeepSeek。"
+            )
+
+    return heavy_driver, light_driver, notices
+
+
+def format_model_stack_name(heavy_driver, light_driver):
+    if light_driver and light_driver.valid and light_driver.provider != heavy_driver.provider:
+        return f"{heavy_driver.label} + {light_driver.label}"
+    return heavy_driver.label
 
 
 class FinanceCatalysts(BaseModel):
@@ -720,6 +778,7 @@ with st.sidebar:
             return os.getenv(name, default)
 
     api_key = _get_runtime_secret("DEEPSEEK_API_KEY", "")
+    gemini_key = _get_runtime_secret("GEMINI_API_KEY", "") or _get_runtime_secret("GOOGLE_API_KEY", "")
     tavily_key = _get_runtime_secret("TAVILY_API_KEY", "")
     jina_key = _get_runtime_secret("JINA_API_KEY", "")
     gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
@@ -731,6 +790,18 @@ with st.sidebar:
 
     st.divider()
     model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
+    use_gemini_light = st.toggle("启用 Gemini AI Studio 轻任务引擎（保留当前主功能）", value=False)
+    gemini_light_model = st.selectbox(
+        "Gemini 轻任务模型",
+        [DEFAULT_GEMINI_LIGHT_MODEL],
+        index=0,
+        disabled=not use_gemini_light,
+    )
+    if use_gemini_light:
+        if gemini_key:
+            st.caption("当前按 Google AI Studio 的 OpenAI 兼容接口接入。轻任务包括：事件主档抽取、切片候选提取。最终长新闻成稿仍由 DeepSeek 负责。")
+        else:
+            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为全 DeepSeek，不影响现有功能。")
     time_opt = st.selectbox("回溯时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
     enable_finance_chain = st.toggle("上市公司金融补链（更耗 token）", value=False)
     time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m"}
@@ -752,12 +823,20 @@ if not st.session_state.report_ready:
 
         if start_btn and api_key and tavily_key:
             topics = [topic.strip() for topic in query_input.split("\\") if topic.strip()]
-            ai = AI_Driver(api_key, model_id)
+            ai, light_ai, ai_notices = build_ai_stack(
+                api_key,
+                model_id,
+                use_gemini_light=use_gemini_light,
+                gemini_key=gemini_key,
+                gemini_model=gemini_light_model,
+            )
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
             mem_manager = GistMemoryManager(gh_token, gist_id)
             mem_manager.load_memory()
             st.info(f"🔎 正在启动并发处理引擎，目标数：{len(topics)}")
+            for notice in ai_notices:
+                st.caption(notice)
 
             def process_company_task(topic, index):
                 try:
@@ -797,7 +876,7 @@ if not st.session_state.report_ready:
                     event_seed_results = raw_results[:EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY]
                     history_hint = mem_manager.get_event_bank_summary(topic, limit=4)
                     event_blueprints = build_event_blueprints(
-                        ai,
+                        light_ai,
                         event_seed_results,
                         topic,
                         current_date_str,
@@ -832,6 +911,7 @@ if not st.session_state.report_ready:
                         source_mode=crawl_result["source_mode"],
                         guidance=company_focus_hint,
                         raw_search_results=analysis_results,
+                        map_ai_driver=light_ai,
                     )
 
                     deep_data_res = None
@@ -904,7 +984,7 @@ if not st.session_state.report_ready:
             st.success("✅ 并发深度分析完成。")
 
             if all_deep_data or all_timeline_data:
-                store_report_outputs(all_deep_data, all_timeline_data, file_name, model_id)
+                store_report_outputs(all_deep_data, all_timeline_data, file_name, format_model_stack_name(ai, light_ai))
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
@@ -933,7 +1013,13 @@ if not st.session_state.report_ready:
         industry_topics = get_industry_topics()
 
         def run_industry_pipeline(industry_topic_list, domain_text, china_mode=False, query_suffix=""):
-            ai = AI_Driver(api_key, model_id)
+            ai, light_ai, ai_notices = build_ai_stack(
+                api_key,
+                model_id,
+                use_gemini_light=use_gemini_light,
+                gemini_key=gemini_key,
+                gemini_model=gemini_light_model,
+            )
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
             mem_manager = GistMemoryManager(gh_token, gist_id)
@@ -943,6 +1029,8 @@ if not st.session_state.report_ready:
                 st.info("🔎 正在启动中国专题并发引擎，仅保留中文网站与中国公司事件。")
             else:
                 st.info("🔎 正在启动全域多路扫描并发引擎，请稍候。")
+            for notice in ai_notices:
+                st.caption(notice)
 
             def process_industry_task(topic_pack, index):
                 try:
@@ -994,7 +1082,7 @@ if not st.session_state.report_ready:
                     event_seed_results = top_results[:EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY]
                     history_hint = mem_manager.get_event_bank_summary(topic_key, limit=4)
                     event_blueprints = build_event_blueprints(
-                        ai,
+                        light_ai,
                         event_seed_results,
                         topic_key,
                         current_date_str,
@@ -1032,6 +1120,7 @@ if not st.session_state.report_ready:
                             if china_mode else focus_hint
                         ),
                         raw_search_results=analysis_results,
+                        map_ai_driver=light_ai,
                     )
 
                     deep_data_res = None
@@ -1092,7 +1181,7 @@ if not st.session_state.report_ready:
             mem_manager.save_memory()
             all_deep_data = [item[1] for item in results if item[1] is not None]
             all_timeline_data = [item[2] for item in results if item[2] is not None]
-            return all_deep_data, all_timeline_data
+            return all_deep_data, all_timeline_data, format_model_stack_name(ai, light_ai)
 
         col_global, col_cn = st.columns(2)
         with col_global:
@@ -1101,22 +1190,22 @@ if not st.session_state.report_ready:
             start_cn_industry_btn = st.button("🇨🇳 一键并发生成《中国公司中文站点专题》", type="secondary", key="btn_industry_cn")
 
         if start_industry_btn and api_key and tavily_key:
-            all_deep_data, all_timeline_data = run_industry_pipeline(industry_topics, search_domain, china_mode=False)
+            all_deep_data, all_timeline_data, active_model_name = run_industry_pipeline(industry_topics, search_domain, china_mode=False)
             if all_deep_data or all_timeline_data:
-                store_report_outputs(all_deep_data, all_timeline_data, file_name, model_id)
+                store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name)
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
 
         if start_cn_industry_btn and api_key and tavily_key:
-            all_deep_data, all_timeline_data = run_industry_pipeline(
+            all_deep_data, all_timeline_data, active_model_name = run_industry_pipeline(
                 industry_topics,
                 china_sites,
                 china_mode=True,
                 query_suffix=china_query_suffix,
             )
             if all_deep_data or all_timeline_data:
-                store_report_outputs(all_deep_data, all_timeline_data, file_name, model_id)
+                store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name)
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
