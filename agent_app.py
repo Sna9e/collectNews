@@ -106,10 +106,18 @@ INDUSTRY_CRAWL_URL_LIMIT = 8
 MAX_SOURCE_CHARS_PER_URL = 2400
 DEFAULT_GEMINI_LIGHT_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_GEMINI_MAIN_MODEL = "gemini-2.5-flash-lite"
+GEMINI_3_FLASH_PREVIEW_MODEL = "gemini-3-flash-preview"
+# Inference from Google's public model naming pattern + model catalog entry.
+# If a specific account has not exposed this preview string yet, users can
+# still override it through the custom model field below.
+GEMINI_31_FLASH_LITE_PRESET = "gemini-3.1-flash-lite-preview"
 GEMINI_MODEL_OPTIONS = [
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
+    "gemini-flash-latest",
+    GEMINI_3_FLASH_PREVIEW_MODEL,
+    "__custom__",
 ]
 DEFAULT_SEARCH_PROVIDER = "exa"
 DEFAULT_EXA_SEARCH_TYPE = "auto"
@@ -133,6 +141,12 @@ SEARCH_UI_DEFAULTS = {
     "exa_text_chars": DEFAULT_EXA_TEXT_CHARS,
     "exa_include_text": DEFAULT_EXA_INCLUDE_TEXT,
     "exa_exclude_text": DEFAULT_EXA_EXCLUDE_TEXT,
+    "use_gemini_main": False,
+    "gemini_main_model": DEFAULT_GEMINI_MAIN_MODEL,
+    "gemini_main_model_custom": "",
+    "use_gemini_light": False,
+    "gemini_light_model": DEFAULT_GEMINI_LIGHT_MODEL,
+    "gemini_light_model_custom": "",
 }
 
 for session_key, default_value in SESSION_DEFAULTS.items():
@@ -311,6 +325,25 @@ def format_search_provider_option(provider):
     return labels.get(normalize_search_provider(provider), "Exa（推荐默认）")
 
 
+def format_gemini_model_option(model_name):
+    labels = {
+        "gemini-2.5-flash-lite": "Gemini 2.5 Flash-Lite",
+        "gemini-2.5-flash": "Gemini 2.5 Flash",
+        "gemini-2.5-pro": "Gemini 2.5 Pro",
+        "gemini-flash-latest": "Gemini Flash Latest（滚动别名）",
+        GEMINI_3_FLASH_PREVIEW_MODEL: "Gemini 3 Flash Preview",
+        "__custom__": "自定义模型 ID",
+    }
+    return labels.get(model_name, model_name)
+
+
+def resolve_gemini_model_name(selected_model, custom_model, fallback_model):
+    if selected_model == "__custom__":
+        custom_value = str(custom_model or "").strip()
+        return custom_value or fallback_model
+    return str(selected_model or fallback_model).strip() or fallback_model
+
+
 
 def apply_exa_default_preset():
     st.session_state.search_provider = DEFAULT_SEARCH_PROVIDER
@@ -330,6 +363,18 @@ def apply_exa_hardtech_preset():
     st.session_state.search_provider = "exa"
     st.session_state.exa_include_text = HARDTECH_EXA_INCLUDE_TEXT
     st.session_state.exa_exclude_text = HARDTECH_EXA_EXCLUDE_TEXT
+
+
+def apply_gemini_3_flash_main_preset():
+    st.session_state.use_gemini_main = True
+    st.session_state.gemini_main_model = GEMINI_3_FLASH_PREVIEW_MODEL
+    st.session_state.gemini_main_model_custom = ""
+
+
+def apply_gemini_31_flash_lite_main_preset():
+    st.session_state.use_gemini_main = True
+    st.session_state.gemini_main_model = "__custom__"
+    st.session_state.gemini_main_model_custom = GEMINI_31_FLASH_LITE_PRESET
 
 
 
@@ -1087,24 +1132,61 @@ with st.sidebar:
 
     st.divider()
     model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
-    use_gemini_main = st.toggle("使用 Gemini AI Studio 作为主模型（保留当前 Prompt）", value=False)
-    gemini_main_model = st.selectbox(
+    use_gemini_main = st.toggle(
+        "使用 Gemini AI Studio 作为主模型（保留当前 Prompt）",
+        key="use_gemini_main",
+    )
+    gemini_main_preset_col1, gemini_main_preset_col2 = st.columns(2)
+    with gemini_main_preset_col1:
+        if st.button("切到 Gemini 3 Flash", key="btn_gemini_3_flash_main", disabled=not gemini_key):
+            apply_gemini_3_flash_main_preset()
+    with gemini_main_preset_col2:
+        if st.button("尝试 3.1 Flash-Lite", key="btn_gemini_31_flash_lite_main", disabled=not gemini_key):
+            apply_gemini_31_flash_lite_main_preset()
+    gemini_main_model_choice = st.selectbox(
         "Gemini 主模型",
         GEMINI_MODEL_OPTIONS,
-        index=0,
+        key="gemini_main_model",
         disabled=not use_gemini_main,
+        format_func=format_gemini_model_option,
+    )
+    gemini_main_model_custom = st.text_input(
+        "Gemini 主模型自定义 ID",
+        key="gemini_main_model_custom",
+        disabled=(not use_gemini_main or gemini_main_model_choice != "__custom__"),
+        placeholder="例如：gemini-3.1-flash-lite-preview",
+    )
+    gemini_main_model = resolve_gemini_model_name(
+        gemini_main_model_choice,
+        gemini_main_model_custom,
+        DEFAULT_GEMINI_MAIN_MODEL,
     )
     if use_gemini_main:
         if gemini_key:
-            st.caption("主模型可切到 Gemini AI Studio；这会复用当前同一套 Prompt、输出结构和页面，不改业务链路。")
+            st.caption(
+                "主模型可切到 Gemini AI Studio；这会复用当前同一套 Prompt、输出结构和页面，不改业务链路。"
+                " `Gemini 3.1 Flash-Lite` 这里按公开命名规则做了预设，若你的账号尚未开放该预览 ID，可改回 Gemini 3 Flash 或手动填写。"
+            )
         else:
             st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为 DeepSeek。")
-    use_gemini_light = st.toggle("启用 Gemini AI Studio 轻任务引擎（保留当前主功能）", value=False)
-    gemini_light_model = st.selectbox(
+    use_gemini_light = st.toggle("启用 Gemini AI Studio 轻任务引擎（保留当前主功能）", key="use_gemini_light")
+    gemini_light_model_choice = st.selectbox(
         "Gemini 轻任务模型",
         GEMINI_MODEL_OPTIONS,
-        index=0,
+        key="gemini_light_model",
         disabled=not use_gemini_light,
+        format_func=format_gemini_model_option,
+    )
+    gemini_light_model_custom = st.text_input(
+        "Gemini 轻任务自定义 ID",
+        key="gemini_light_model_custom",
+        disabled=(not use_gemini_light or gemini_light_model_choice != "__custom__"),
+        placeholder="例如：gemini-3.1-flash-lite-preview",
+    )
+    gemini_light_model = resolve_gemini_model_name(
+        gemini_light_model_choice,
+        gemini_light_model_custom,
+        DEFAULT_GEMINI_LIGHT_MODEL,
     )
     if use_gemini_light:
         if gemini_key:
