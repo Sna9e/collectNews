@@ -105,6 +105,12 @@ COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
 MAX_SOURCE_CHARS_PER_URL = 2400
 DEFAULT_GEMINI_LIGHT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_GEMINI_MAIN_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODEL_OPTIONS = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+]
 DEFAULT_SEARCH_PROVIDER = "exa"
 DEFAULT_EXA_SEARCH_TYPE = "auto"
 DEFAULT_EXA_CATEGORY = "news"
@@ -215,18 +221,54 @@ class AI_Driver:
             return None
 
 
-def build_ai_stack(deepseek_key, deepseek_model, use_gemini_light=False, gemini_key="", gemini_model=DEFAULT_GEMINI_LIGHT_MODEL):
-    heavy_driver = AI_Driver(deepseek_key, deepseek_model, provider="deepseek")
+def build_ai_stack(
+    deepseek_key,
+    deepseek_model,
+    use_gemini_light=False,
+    gemini_key="",
+    gemini_model=DEFAULT_GEMINI_LIGHT_MODEL,
+    use_gemini_main=False,
+    gemini_main_model=DEFAULT_GEMINI_MAIN_MODEL,
+):
+    deepseek_driver = AI_Driver(deepseek_key, deepseek_model, provider="deepseek")
+    heavy_driver = deepseek_driver
     light_driver = heavy_driver
     notices = []
+
+    if use_gemini_main:
+        gemini_heavy_driver = AI_Driver(gemini_key, gemini_main_model, provider="gemini")
+        if gemini_heavy_driver.valid:
+            heavy_driver = gemini_heavy_driver
+            light_driver = heavy_driver
+            notices.append(
+                f"主模型已切换到 {heavy_driver.label}；当前沿用同一套 Prompt 和输出结构。"
+            )
+        elif deepseek_driver.valid:
+            notices.append(
+                "已开启 Gemini AI Studio 主模型，但当前未检测到可用的 GEMINI_API_KEY / GOOGLE_API_KEY；本次自动回退为 DeepSeek。"
+            )
+        else:
+            heavy_driver = gemini_heavy_driver
+            light_driver = heavy_driver
 
     if use_gemini_light:
         gemini_driver = AI_Driver(gemini_key, gemini_model, provider="gemini")
         if gemini_driver.valid:
-            light_driver = gemini_driver
-            notices.append(
-                f"轻任务引擎已切换到 {light_driver.label}；DeepSeek 继续负责最终成稿和金融分析。"
-            )
+            if heavy_driver.valid and heavy_driver.provider == "gemini" and heavy_driver.model_id == gemini_model:
+                light_driver = heavy_driver
+                notices.append(
+                    f"轻任务引擎与主模型共用 {light_driver.label}。"
+                )
+            else:
+                light_driver = gemini_driver
+                if heavy_driver.provider == "gemini":
+                    notices.append(
+                        f"主模型使用 {heavy_driver.label}，轻任务使用 {light_driver.label}。"
+                    )
+                else:
+                    notices.append(
+                        f"轻任务引擎已切换到 {light_driver.label}；DeepSeek 继续负责最终成稿和金融分析。"
+                    )
         else:
             notices.append(
                 "已开启 Gemini AI Studio 轻任务引擎，但当前未检测到可用的 GEMINI_API_KEY / GOOGLE_API_KEY；本次自动回退为全 DeepSeek。"
@@ -1038,17 +1080,29 @@ with st.sidebar:
     jina_key = _get_runtime_secret("JINA_API_KEY", "")
     gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
     gist_id = _get_runtime_secret("GIST_ID", "")
-    if api_key and (tavily_key or exa_key):
+    if (api_key or gemini_key) and (tavily_key or exa_key):
         st.success("🔐 部门专属安全引擎已连接")
     else:
         st.error("⚠️ 未检测到可用的搜索或模型密钥，请补充 API Key。")
 
     st.divider()
     model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
+    use_gemini_main = st.toggle("使用 Gemini AI Studio 作为主模型（保留当前 Prompt）", value=False)
+    gemini_main_model = st.selectbox(
+        "Gemini 主模型",
+        GEMINI_MODEL_OPTIONS,
+        index=0,
+        disabled=not use_gemini_main,
+    )
+    if use_gemini_main:
+        if gemini_key:
+            st.caption("主模型可切到 Gemini AI Studio；这会复用当前同一套 Prompt、输出结构和页面，不改业务链路。")
+        else:
+            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为 DeepSeek。")
     use_gemini_light = st.toggle("启用 Gemini AI Studio 轻任务引擎（保留当前主功能）", value=False)
     gemini_light_model = st.selectbox(
         "Gemini 轻任务模型",
-        [DEFAULT_GEMINI_LIGHT_MODEL],
+        GEMINI_MODEL_OPTIONS,
         index=0,
         disabled=not use_gemini_light,
     )
@@ -1134,7 +1188,7 @@ if not st.session_state.report_ready:
         start_btn = st.button("🚀 启动并发战情推演", type="primary", key="btn_company")
         active_search_provider, search_notices = resolve_search_provider(search_provider, tavily_key, exa_key)
 
-        if start_btn and api_key and active_search_provider:
+        if start_btn and active_search_provider:
             topics = [topic.strip() for topic in query_input.split("\\") if topic.strip()]
             ai, light_ai, ai_notices = build_ai_stack(
                 api_key,
@@ -1142,7 +1196,12 @@ if not st.session_state.report_ready:
                 use_gemini_light=use_gemini_light,
                 gemini_key=gemini_key,
                 gemini_model=gemini_light_model,
+                use_gemini_main=use_gemini_main,
+                gemini_main_model=gemini_main_model,
             )
+            if not ai.valid:
+                st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
+                st.stop()
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
             mem_manager = GistMemoryManager(gh_token, gist_id)
@@ -1320,8 +1379,6 @@ if not st.session_state.report_ready:
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
-        elif start_btn and not api_key:
-            st.error("当前没有检测到 DEEPSEEK_API_KEY，无法启动主分析链路。")
         elif start_btn and not active_search_provider:
             st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
 
@@ -1356,7 +1413,12 @@ if not st.session_state.report_ready:
                 use_gemini_light=use_gemini_light,
                 gemini_key=gemini_key,
                 gemini_model=gemini_light_model,
+                use_gemini_main=use_gemini_main,
+                gemini_main_model=gemini_main_model,
             )
+            if not ai.valid:
+                st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
+                return [], [], "未启用模型", {}
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
             mem_manager = GistMemoryManager(gh_token, gist_id)
@@ -1543,19 +1605,17 @@ if not st.session_state.report_ready:
         with col_cn:
             start_cn_industry_btn = st.button("🇨🇳 一键并发生成《中国公司中文站点专题》", type="secondary", key="btn_industry_cn")
 
-        if start_industry_btn and api_key and active_search_provider:
+        if start_industry_btn and active_search_provider:
             all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(industry_topics, search_domain, china_mode=False)
             if all_deep_data or all_timeline_data:
                 store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name, run_metadata=search_runtime)
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
-        elif start_industry_btn and not api_key:
-            st.error("当前没有检测到 DEEPSEEK_API_KEY，无法启动主分析链路。")
         elif start_industry_btn and not active_search_provider:
             st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
 
-        if start_cn_industry_btn and api_key and active_search_provider:
+        if start_cn_industry_btn and active_search_provider:
             all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(
                 industry_topics,
                 china_sites,
@@ -1567,8 +1627,6 @@ if not st.session_state.report_ready:
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
-        elif start_cn_industry_btn and not api_key:
-            st.error("当前没有检测到 DEEPSEEK_API_KEY，无法启动主分析链路。")
         elif start_cn_industry_btn and not active_search_provider:
             st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
 
