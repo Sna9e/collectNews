@@ -5,11 +5,11 @@ import html
 import json
 import os
 import re
+import subprocess
+import sys
+import tomllib
 import traceback
-
-import streamlit as st
-from openai import OpenAI
-from pydantic import BaseModel, Field
+from pathlib import Path
 
 from agents.deep_analyst import map_reduce_analysis
 from agents.timeline_agent import build_event_blueprints, generate_timeline
@@ -34,10 +34,83 @@ from tools.report_linker import annotate_report_data
 from tools.search_engine import (
     audit_recent_news_results,
     filter_china_results,
+    get_search_diagnostics,
     merge_sites_text,
+    reset_search_diagnostics,
     safe_run_async_crawler,
     search_web,
 )
+
+_LOCAL_SECRET_CACHE = None
+
+
+def _bootstrap_streamlit_when_run_directly():
+    if __name__ != "__main__":
+        return
+    argv = [str(arg or "") for arg in sys.argv]
+    if any(arg == "run" for arg in argv):
+        return
+    script_name = Path(argv[0]).name.lower() if argv else ""
+    if script_name != "agent_app.py":
+        return
+    if os.getenv("COLLECTNEWS_STREAMLIT_BOOTSTRAPPED") == "1":
+        return
+
+    print("检测到直接运行 agent_app.py，正在自动切换到 `streamlit run agent_app.py` ...")
+    env = os.environ.copy()
+    env["COLLECTNEWS_STREAMLIT_BOOTSTRAPPED"] = "1"
+    app_path = Path(__file__).resolve()
+    raise SystemExit(
+        subprocess.call(
+            [sys.executable, "-m", "streamlit", "run", str(app_path)],
+            cwd=str(app_path.parent),
+            env=env,
+        )
+    )
+
+
+def _looks_like_placeholder_secret(value):
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return True
+    return (
+        normalized.startswith("your-")
+        or normalized.startswith("your_")
+        or "placeholder" in normalized
+        or normalized in {"changeme", "replace-me", "xxx", "xxxxx"}
+    )
+
+
+def _load_local_secret_fallback():
+    global _LOCAL_SECRET_CACHE
+    if _LOCAL_SECRET_CACHE is not None:
+        return _LOCAL_SECRET_CACHE
+
+    candidates = [
+        Path(__file__).resolve().parent / ".streamlit" / "secrets.toml",
+        Path(__file__).resolve().parent / ".streamlit" / "secrets.toml.example",
+    ]
+    merged = {}
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            raw_text = candidate.read_text(encoding="utf-8-sig")
+            data = tomllib.loads(raw_text)
+            if isinstance(data, dict):
+                merged.update(data)
+        except Exception as exc:
+            print(f"⚠️ Failed to load local secrets from {candidate}: {exc}")
+
+    _LOCAL_SECRET_CACHE = merged
+    return _LOCAL_SECRET_CACHE
+
+
+_bootstrap_streamlit_when_run_directly()
+
+import streamlit as st
+from openai import OpenAI
+from pydantic import BaseModel, Field
 
 
 st.set_page_config(page_title="DeepSeek 部门情报中心", page_icon="🧠", layout="wide")
@@ -48,6 +121,7 @@ SESSION_DEFAULTS = {
     "ppt_path": "",
     "report_data": [],
     "timeline_data": [],
+    "run_metadata": {},
     "report_celebrated": False,
 }
 
@@ -66,15 +140,10 @@ DEFAULT_EXA_RESULT_LIMIT = 10
 DEFAULT_EXA_CONTENT_MODE = "highlights"
 DEFAULT_EXA_HIGHLIGHTS_CHARS = 2200
 DEFAULT_EXA_TEXT_CHARS = 4000
-DEFAULT_EXA_LIVECRAWL = "fallback"
 DEFAULT_EXA_INCLUDE_TEXT = ""
 DEFAULT_EXA_EXCLUDE_TEXT = ""
 HARDTECH_EXA_INCLUDE_TEXT = "chip datacenter optics robotics satellite"
 HARDTECH_EXA_EXCLUDE_TEXT = "lawsuit court attorney privacy antitrust"
-
-for session_key, default_value in SESSION_DEFAULTS.items():
-    if session_key not in st.session_state:
-        st.session_state[session_key] = default_value
 
 SEARCH_UI_DEFAULTS = {
     "search_provider": DEFAULT_SEARCH_PROVIDER,
@@ -84,10 +153,13 @@ SEARCH_UI_DEFAULTS = {
     "exa_content_mode": DEFAULT_EXA_CONTENT_MODE,
     "exa_highlights_chars": DEFAULT_EXA_HIGHLIGHTS_CHARS,
     "exa_text_chars": DEFAULT_EXA_TEXT_CHARS,
-    "exa_livecrawl": DEFAULT_EXA_LIVECRAWL,
     "exa_include_text": DEFAULT_EXA_INCLUDE_TEXT,
     "exa_exclude_text": DEFAULT_EXA_EXCLUDE_TEXT,
 }
+
+for session_key, default_value in SESSION_DEFAULTS.items():
+    if session_key not in st.session_state:
+        st.session_state[session_key] = default_value
 
 for session_key, default_value in SEARCH_UI_DEFAULTS.items():
     if session_key not in st.session_state:
@@ -234,7 +306,6 @@ def apply_exa_default_preset():
     st.session_state.exa_content_mode = DEFAULT_EXA_CONTENT_MODE
     st.session_state.exa_highlights_chars = DEFAULT_EXA_HIGHLIGHTS_CHARS
     st.session_state.exa_text_chars = DEFAULT_EXA_TEXT_CHARS
-    st.session_state.exa_livecrawl = DEFAULT_EXA_LIVECRAWL
     st.session_state.exa_include_text = DEFAULT_EXA_INCLUDE_TEXT
     st.session_state.exa_exclude_text = DEFAULT_EXA_EXCLUDE_TEXT
 
@@ -245,6 +316,71 @@ def apply_exa_hardtech_preset():
     st.session_state.search_provider = "exa"
     st.session_state.exa_include_text = HARDTECH_EXA_INCLUDE_TEXT
     st.session_state.exa_exclude_text = HARDTECH_EXA_EXCLUDE_TEXT
+
+
+
+def build_run_metadata(requested_provider, resolved_provider, notices, diagnostics):
+    diagnostics = diagnostics or {}
+    providers = diagnostics.get("providers", {}) or {}
+    fallback_triggered = bool(notices)
+
+    if requested_provider == "exa" and providers.get("exa", {}).get("failure", 0) > 0:
+        fallback_triggered = True
+    if requested_provider == "hybrid":
+        exa_failures = providers.get("exa", {}).get("failure", 0)
+        tavily_success = providers.get("tavily", {}).get("success", 0)
+        if exa_failures > 0 and tavily_success > 0:
+            fallback_triggered = True
+
+    return {
+        "requested_provider": normalize_search_provider(requested_provider),
+        "resolved_provider": normalize_search_provider(resolved_provider),
+        "notices": list(notices or []),
+        "diagnostics": diagnostics,
+        "fallback_triggered": bool(fallback_triggered),
+    }
+
+
+
+def render_search_runtime_panel(run_metadata):
+    meta = dict(run_metadata or {})
+    if not meta:
+        return
+
+    requested_label = format_search_provider_label(meta.get("requested_provider"))
+    resolved_label = format_search_provider_label(meta.get("resolved_provider"))
+    diagnostics = meta.get("diagnostics", {}) or {}
+    providers = diagnostics.get("providers", {}) or {}
+
+    summary_parts = [
+        f"请求引擎：{requested_label}",
+        f"实际启用：{resolved_label}",
+        f"是否回退：{'是' if meta.get('fallback_triggered') else '否'}",
+    ]
+    st.markdown("### 搜索引擎状态")
+    st.info(" | ".join(summary_parts))
+
+    provider_parts = []
+    for provider_key in ("exa", "tavily"):
+        stats = providers.get(provider_key, {})
+        if not stats:
+            continue
+        provider_parts.append(
+            f"{format_search_provider_label(provider_key)} 成功 {int(stats.get('success', 0) or 0)} 次 / "
+            f"失败 {int(stats.get('failure', 0) or 0)} 次 / 结果 {int(stats.get('result_count', 0) or 0)} 条"
+        )
+    if provider_parts:
+        st.caption("；".join(provider_parts))
+
+    for notice in meta.get("notices", []) or []:
+        st.warning(notice)
+
+    failures = diagnostics.get("failures", []) or []
+    if failures:
+        top_failure = failures[0]
+        provider_label = format_search_provider_label(top_failure.get("provider"))
+        failure_detail = str(top_failure.get("detail", "") or "")[:240]
+        st.caption(f"最近一次失败：{provider_label} | {failure_detail}")
 
 
 
@@ -670,10 +806,11 @@ def build_error_section_payload(topic, error_text, freshness_stats=None, focus_t
 
 
 
-def store_report_outputs(all_deep_data, all_timeline_data, export_name, model_name):
+def store_report_outputs(all_deep_data, all_timeline_data, export_name, model_name, run_metadata=None):
     linked_deep_data, linked_timeline_data = annotate_report_data(all_deep_data, all_timeline_data)
     st.session_state.report_data = linked_deep_data
     st.session_state.timeline_data = linked_timeline_data
+    st.session_state.run_metadata = dict(run_metadata or {})
     st.session_state.word_path = generate_word(linked_deep_data, linked_timeline_data, export_name, model_name)
     st.session_state.ppt_path = generate_ppt(linked_deep_data, linked_timeline_data, export_name, model_name)
     st.session_state.report_ready = True
@@ -687,6 +824,7 @@ def reset_report_state():
     st.session_state.ppt_path = ""
     st.session_state.report_data = []
     st.session_state.timeline_data = []
+    st.session_state.run_metadata = {}
     st.session_state.report_celebrated = False
 
 
@@ -905,9 +1043,21 @@ with st.sidebar:
     st.header("🧠 部门情报控制台")
     def _get_runtime_secret(name, default=""):
         try:
-            return st.secrets[name]
+            value = st.secrets[name]
+            if not _looks_like_placeholder_secret(value):
+                return value
         except Exception:
-            return os.getenv(name, default)
+            pass
+
+        env_value = os.getenv(name, "")
+        if not _looks_like_placeholder_secret(env_value):
+            return env_value
+
+        local_fallback = _load_local_secret_fallback().get(name, "")
+        if not _looks_like_placeholder_secret(local_fallback):
+            return local_fallback
+
+        return default
 
     api_key = _get_runtime_secret("DEEPSEEK_API_KEY", "")
     gemini_key = _get_runtime_secret("GEMINI_API_KEY", "") or _get_runtime_secret("GOOGLE_API_KEY", "")
@@ -955,7 +1105,7 @@ with st.sidebar:
             if st.button("硬科技优先预设", key="btn_exa_hardtech"):
                 apply_exa_hardtech_preset()
 
-        st.caption("默认已经改为 Exa：`auto + news + highlights + fallback livecrawl`。这套最适合你们当前的科技新闻场景。")
+        st.caption("默认已经改为 Exa：`auto + news + highlights`。这套最适合你们当前的科技新闻场景，也更接近 Exa Search 官方支持的稳定参数。")
         exa_search_type = st.selectbox(
             "Exa 搜索类型",
             ["auto", "fast", "instant", "deep"],
@@ -986,17 +1136,6 @@ with st.sidebar:
         )
         exa_highlights_chars = st.slider("Exa highlights 最大字符数", min_value=800, max_value=4000, step=200, key="exa_highlights_chars")
         exa_text_chars = st.slider("Exa text 最大字符数", min_value=1200, max_value=8000, step=400, key="exa_text_chars")
-        exa_livecrawl = st.selectbox(
-            "Exa Livecrawl 策略",
-            ["fallback", "preferred", "never", "always"],
-            key="exa_livecrawl",
-            format_func=lambda item: {
-                "fallback": "fallback（推荐，平衡成本和新鲜度）",
-                "preferred": "preferred（更偏向最新页面）",
-                "never": "never（最快，尽量用缓存）",
-                "always": "always（最重，不建议默认）",
-            }.get(item, item),
-        )
         exa_include_text = st.text_input("Exa 必含关键词（可选，1-5词）", key="exa_include_text")
         exa_exclude_text = st.text_input("Exa 排除关键词（可选，1-5词）", key="exa_exclude_text")
         exa_search_settings = {
@@ -1006,7 +1145,6 @@ with st.sidebar:
             "content_mode": exa_content_mode,
             "highlights_max_characters": int(exa_highlights_chars),
             "text_max_characters": int(exa_text_chars),
-            "livecrawl": exa_livecrawl,
             "include_text": exa_include_text,
             "exclude_text": exa_exclude_text,
         }
@@ -1037,6 +1175,7 @@ if not st.session_state.report_ready:
             current_date_str = current_dt.strftime("%Y年%m月%d日")
             mem_manager = GistMemoryManager(gh_token, gist_id)
             mem_manager.load_memory()
+            reset_search_diagnostics()
             st.info(f"🔎 正在启动并发处理引擎，目标数：{len(topics)}")
             for notice in ai_notices:
                 st.caption(notice)
@@ -1190,10 +1329,22 @@ if not st.session_state.report_ready:
             all_deep_data = [item[1] for item in results if item[1] is not None]
             all_timeline_data = [item[2] for item in results if item[2] is not None]
             mem_manager.save_memory()
+            search_runtime = build_run_metadata(
+                requested_provider=search_provider,
+                resolved_provider=active_search_provider,
+                notices=search_notices,
+                diagnostics=get_search_diagnostics(),
+            )
             st.success("✅ 并发深度分析完成。")
 
             if all_deep_data or all_timeline_data:
-                store_report_outputs(all_deep_data, all_timeline_data, file_name, format_model_stack_name(ai, light_ai))
+                store_report_outputs(
+                    all_deep_data,
+                    all_timeline_data,
+                    file_name,
+                    format_model_stack_name(ai, light_ai),
+                    run_metadata=search_runtime,
+                )
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
@@ -1238,6 +1389,7 @@ if not st.session_state.report_ready:
             current_date_str = current_dt.strftime("%Y年%m月%d日")
             mem_manager = GistMemoryManager(gh_token, gist_id)
             mem_manager.load_memory()
+            reset_search_diagnostics()
 
             if china_mode:
                 st.info("🔎 正在启动中国专题并发引擎，仅保留中文网站与中国公司事件。")
@@ -1401,7 +1553,17 @@ if not st.session_state.report_ready:
             mem_manager.save_memory()
             all_deep_data = [item[1] for item in results if item[1] is not None]
             all_timeline_data = [item[2] for item in results if item[2] is not None]
-            return all_deep_data, all_timeline_data, format_model_stack_name(ai, light_ai)
+            return (
+                all_deep_data,
+                all_timeline_data,
+                format_model_stack_name(ai, light_ai),
+                build_run_metadata(
+                    requested_provider=search_provider,
+                    resolved_provider=active_search_provider,
+                    notices=search_notices,
+                    diagnostics=get_search_diagnostics(),
+                ),
+            )
 
         col_global, col_cn = st.columns(2)
         with col_global:
@@ -1410,9 +1572,9 @@ if not st.session_state.report_ready:
             start_cn_industry_btn = st.button("🇨🇳 一键并发生成《中国公司中文站点专题》", type="secondary", key="btn_industry_cn")
 
         if start_industry_btn and api_key and active_search_provider:
-            all_deep_data, all_timeline_data, active_model_name = run_industry_pipeline(industry_topics, search_domain, china_mode=False)
+            all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(industry_topics, search_domain, china_mode=False)
             if all_deep_data or all_timeline_data:
-                store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name)
+                store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name, run_metadata=search_runtime)
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
@@ -1422,14 +1584,14 @@ if not st.session_state.report_ready:
             st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
 
         if start_cn_industry_btn and api_key and active_search_provider:
-            all_deep_data, all_timeline_data, active_model_name = run_industry_pipeline(
+            all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(
                 industry_topics,
                 china_sites,
                 china_mode=True,
                 query_suffix=china_query_suffix,
             )
             if all_deep_data or all_timeline_data:
-                store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name)
+                store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name, run_metadata=search_runtime)
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
@@ -1444,6 +1606,7 @@ else:
         st.session_state.report_celebrated = True
 
     st.success("🎉 战报生成完成。")
+    render_search_runtime_panel(st.session_state.run_metadata)
     report_warnings = []
     for section in st.session_state.report_data:
         report_warnings.extend(get_value(section, "warnings", []))
