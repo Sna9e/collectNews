@@ -44,31 +44,6 @@ from tools.search_engine import (
 _LOCAL_SECRET_CACHE = None
 
 
-def _bootstrap_streamlit_when_run_directly():
-    if __name__ != "__main__":
-        return
-    argv = [str(arg or "") for arg in sys.argv]
-    if any(arg == "run" for arg in argv):
-        return
-    script_name = Path(argv[0]).name.lower() if argv else ""
-    if script_name != "agent_app.py":
-        return
-    if os.getenv("COLLECTNEWS_STREAMLIT_BOOTSTRAPPED") == "1":
-        return
-
-    print("检测到直接运行 agent_app.py，正在自动切换到 `streamlit run agent_app.py` ...")
-    env = os.environ.copy()
-    env["COLLECTNEWS_STREAMLIT_BOOTSTRAPPED"] = "1"
-    app_path = Path(__file__).resolve()
-    raise SystemExit(
-        subprocess.call(
-            [sys.executable, "-m", "streamlit", "run", str(app_path)],
-            cwd=str(app_path.parent),
-            env=env,
-        )
-    )
-
-
 def _looks_like_placeholder_secret(value):
     normalized = str(value or "").strip().lower()
     if not normalized:
@@ -104,9 +79,6 @@ def _load_local_secret_fallback():
 
     _LOCAL_SECRET_CACHE = merged
     return _LOCAL_SECRET_CACHE
-
-
-_bootstrap_streamlit_when_run_directly()
 
 import streamlit as st
 from openai import OpenAI
