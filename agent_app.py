@@ -59,8 +59,37 @@ COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
 MAX_SOURCE_CHARS_PER_URL = 2400
 DEFAULT_GEMINI_LIGHT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_SEARCH_PROVIDER = "exa"
+DEFAULT_EXA_SEARCH_TYPE = "auto"
+DEFAULT_EXA_CATEGORY = "news"
+DEFAULT_EXA_RESULT_LIMIT = 10
+DEFAULT_EXA_CONTENT_MODE = "highlights"
+DEFAULT_EXA_HIGHLIGHTS_CHARS = 2200
+DEFAULT_EXA_TEXT_CHARS = 4000
+DEFAULT_EXA_LIVECRAWL = "fallback"
+DEFAULT_EXA_INCLUDE_TEXT = ""
+DEFAULT_EXA_EXCLUDE_TEXT = ""
+HARDTECH_EXA_INCLUDE_TEXT = "chip datacenter optics robotics satellite"
+HARDTECH_EXA_EXCLUDE_TEXT = "lawsuit court attorney privacy antitrust"
 
 for session_key, default_value in SESSION_DEFAULTS.items():
+    if session_key not in st.session_state:
+        st.session_state[session_key] = default_value
+
+SEARCH_UI_DEFAULTS = {
+    "search_provider": DEFAULT_SEARCH_PROVIDER,
+    "exa_search_type": DEFAULT_EXA_SEARCH_TYPE,
+    "exa_category": DEFAULT_EXA_CATEGORY,
+    "exa_result_limit": DEFAULT_EXA_RESULT_LIMIT,
+    "exa_content_mode": DEFAULT_EXA_CONTENT_MODE,
+    "exa_highlights_chars": DEFAULT_EXA_HIGHLIGHTS_CHARS,
+    "exa_text_chars": DEFAULT_EXA_TEXT_CHARS,
+    "exa_livecrawl": DEFAULT_EXA_LIVECRAWL,
+    "exa_include_text": DEFAULT_EXA_INCLUDE_TEXT,
+    "exa_exclude_text": DEFAULT_EXA_EXCLUDE_TEXT,
+}
+
+for session_key, default_value in SEARCH_UI_DEFAULTS.items():
     if session_key not in st.session_state:
         st.session_state[session_key] = default_value
 
@@ -166,6 +195,91 @@ def format_model_stack_name(heavy_driver, light_driver):
     if light_driver and light_driver.valid and light_driver.provider != heavy_driver.provider:
         return f"{heavy_driver.label} + {light_driver.label}"
     return heavy_driver.label
+
+
+
+def normalize_search_provider(provider):
+    provider_key = str(provider or DEFAULT_SEARCH_PROVIDER).strip().lower()
+    if provider_key in {"tavily", "exa", "hybrid"}:
+        return provider_key
+    return DEFAULT_SEARCH_PROVIDER
+
+
+
+def format_search_provider_label(provider):
+    labels = {
+        "tavily": "Tavily",
+        "exa": "Exa",
+        "hybrid": "Exa + Tavily",
+    }
+    return labels.get(normalize_search_provider(provider), "Tavily")
+
+
+
+def format_search_provider_option(provider):
+    labels = {
+        "exa": "Exa（推荐默认）",
+        "hybrid": "混合（Exa + Tavily）",
+        "tavily": "Tavily",
+    }
+    return labels.get(normalize_search_provider(provider), "Exa（推荐默认）")
+
+
+
+def apply_exa_default_preset():
+    st.session_state.search_provider = DEFAULT_SEARCH_PROVIDER
+    st.session_state.exa_search_type = DEFAULT_EXA_SEARCH_TYPE
+    st.session_state.exa_category = DEFAULT_EXA_CATEGORY
+    st.session_state.exa_result_limit = DEFAULT_EXA_RESULT_LIMIT
+    st.session_state.exa_content_mode = DEFAULT_EXA_CONTENT_MODE
+    st.session_state.exa_highlights_chars = DEFAULT_EXA_HIGHLIGHTS_CHARS
+    st.session_state.exa_text_chars = DEFAULT_EXA_TEXT_CHARS
+    st.session_state.exa_livecrawl = DEFAULT_EXA_LIVECRAWL
+    st.session_state.exa_include_text = DEFAULT_EXA_INCLUDE_TEXT
+    st.session_state.exa_exclude_text = DEFAULT_EXA_EXCLUDE_TEXT
+
+
+
+def apply_exa_hardtech_preset():
+    apply_exa_default_preset()
+    st.session_state.search_provider = "exa"
+    st.session_state.exa_include_text = HARDTECH_EXA_INCLUDE_TEXT
+    st.session_state.exa_exclude_text = HARDTECH_EXA_EXCLUDE_TEXT
+
+
+
+def resolve_search_provider(selected_provider, tavily_key, exa_key):
+    provider = normalize_search_provider(selected_provider)
+    notices = []
+
+    if provider == "hybrid":
+        if tavily_key and exa_key:
+            return "hybrid", notices
+        if exa_key:
+            notices.append("已选择 Tavily + Exa 混合搜索，但当前未检测到 TAVILY_API_KEY，本次自动退回为 Exa。")
+            return "exa", notices
+        if tavily_key:
+            notices.append("已选择 Tavily + Exa 混合搜索，但当前未检测到 EXA_API_KEY，本次自动退回为 Tavily。")
+            return "tavily", notices
+        notices.append("当前既没有 TAVILY_API_KEY，也没有 EXA_API_KEY，本次无法执行搜索。")
+        return "", notices
+
+    if provider == "exa":
+        if exa_key:
+            return "exa", notices
+        if tavily_key:
+            notices.append("已选择 Exa 搜索，但当前未检测到 EXA_API_KEY，本次自动退回为 Tavily。")
+            return "tavily", notices
+        notices.append("当前没有 EXA_API_KEY，且无可回退的 Tavily 引擎。")
+        return "", notices
+
+    if tavily_key:
+        return "tavily", notices
+    if exa_key:
+        notices.append("已选择 Tavily 搜索，但当前未检测到 TAVILY_API_KEY，本次自动退回为 Exa。")
+        return "exa", notices
+    notices.append("当前没有 TAVILY_API_KEY，且无可回退的 Exa 引擎。")
+    return "", notices
 
 
 class FinanceCatalysts(BaseModel):
@@ -448,7 +562,16 @@ def should_show_matched_title(event_text, matched_title):
 
 
 
-def collect_company_search_results(topic, sites_text, time_flag, tavily_key, company_pack=None):
+def collect_company_search_results(
+    topic,
+    sites_text,
+    time_flag,
+    tavily_key,
+    company_pack=None,
+    search_provider=DEFAULT_SEARCH_PROVIDER,
+    exa_key="",
+    exa_settings=None,
+):
     company_pack = company_pack or get_company_query_pack(topic)
     merged_results = []
     seen_urls = set()
@@ -461,7 +584,16 @@ def collect_company_search_results(topic, sites_text, time_flag, tavily_key, com
     )
     per_query_limit = 18 if company_pack.get("id") != "generic" else 16
     for query in build_company_queries_from_pack(topic, company_pack):
-        batch = search_web(query, effective_sites, time_flag, max_results=per_query_limit, tavily_key=tavily_key)
+        batch = search_web(
+            query,
+            effective_sites,
+            time_flag,
+            max_results=per_query_limit,
+            tavily_key=tavily_key,
+            provider=search_provider,
+            exa_key=exa_key,
+            exa_settings=exa_settings,
+        )
         for item in batch or []:
             url = item.get("url")
             if url and url in seen_urls:
@@ -780,13 +912,14 @@ with st.sidebar:
     api_key = _get_runtime_secret("DEEPSEEK_API_KEY", "")
     gemini_key = _get_runtime_secret("GEMINI_API_KEY", "") or _get_runtime_secret("GOOGLE_API_KEY", "")
     tavily_key = _get_runtime_secret("TAVILY_API_KEY", "")
+    exa_key = _get_runtime_secret("EXA_API_KEY", "")
     jina_key = _get_runtime_secret("JINA_API_KEY", "")
     gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
     gist_id = _get_runtime_secret("GIST_ID", "")
-    if api_key and tavily_key:
+    if api_key and (tavily_key or exa_key):
         st.success("🔐 部门专属安全引擎已连接")
     else:
-        st.error("⚠️ 未检测到可用的 Secrets / 环境变量，请补充 API Key。")
+        st.error("⚠️ 未检测到可用的搜索或模型密钥，请补充 API Key。")
 
     st.divider()
     model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
@@ -803,11 +936,80 @@ with st.sidebar:
         else:
             st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为全 DeepSeek，不影响现有功能。")
     time_opt = st.selectbox("回溯时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
+    search_provider = st.selectbox(
+        "搜索引擎",
+        ["exa", "hybrid", "tavily"],
+        key="search_provider",
+        format_func=format_search_provider_option,
+    )
     enable_finance_chain = st.toggle("上市公司金融补链（更耗 token）", value=False)
     time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m"}
 
     with st.expander("⚙️ 高级搜索源设置"):
         sites = st.text_area("重点搜索源", get_default_sites_text(), height=250)
+        preset_col1, preset_col2 = st.columns(2)
+        with preset_col1:
+            if st.button("恢复 Exa 默认", key="btn_exa_default"):
+                apply_exa_default_preset()
+        with preset_col2:
+            if st.button("硬科技优先预设", key="btn_exa_hardtech"):
+                apply_exa_hardtech_preset()
+
+        st.caption("默认已经改为 Exa：`auto + news + highlights + fallback livecrawl`。这套最适合你们当前的科技新闻场景。")
+        exa_search_type = st.selectbox(
+            "Exa 搜索类型",
+            ["auto", "fast", "instant", "deep"],
+            key="exa_search_type",
+        )
+        exa_category = st.selectbox(
+            "Exa 结果类别",
+            ["news", "", "financial report", "research paper", "personal site"],
+            key="exa_category",
+            format_func=lambda item: {
+                "news": "news（推荐）",
+                "": "自动/不强制",
+                "financial report": "financial report",
+                "research paper": "research paper",
+                "personal site": "personal site",
+            }.get(item, item),
+        )
+        exa_result_limit = st.number_input("Exa 每次查询结果数", min_value=3, max_value=20, step=1, key="exa_result_limit")
+        exa_content_mode = st.selectbox(
+            "Exa 搜索内容",
+            ["highlights", "highlights_text", "text"],
+            key="exa_content_mode",
+            format_func=lambda item: {
+                "highlights": "highlights（推荐，最稳）",
+                "highlights_text": "highlights + text（更全，但更贵）",
+                "text": "text（不推荐，容易太重）",
+            }.get(item, item),
+        )
+        exa_highlights_chars = st.slider("Exa highlights 最大字符数", min_value=800, max_value=4000, step=200, key="exa_highlights_chars")
+        exa_text_chars = st.slider("Exa text 最大字符数", min_value=1200, max_value=8000, step=400, key="exa_text_chars")
+        exa_livecrawl = st.selectbox(
+            "Exa Livecrawl 策略",
+            ["fallback", "preferred", "never", "always"],
+            key="exa_livecrawl",
+            format_func=lambda item: {
+                "fallback": "fallback（推荐，平衡成本和新鲜度）",
+                "preferred": "preferred（更偏向最新页面）",
+                "never": "never（最快，尽量用缓存）",
+                "always": "always（最重，不建议默认）",
+            }.get(item, item),
+        )
+        exa_include_text = st.text_input("Exa 必含关键词（可选，1-5词）", key="exa_include_text")
+        exa_exclude_text = st.text_input("Exa 排除关键词（可选，1-5词）", key="exa_exclude_text")
+        exa_search_settings = {
+            "search_type": exa_search_type,
+            "category": exa_category,
+            "num_results": int(exa_result_limit),
+            "content_mode": exa_content_mode,
+            "highlights_max_characters": int(exa_highlights_chars),
+            "text_max_characters": int(exa_text_chars),
+            "livecrawl": exa_livecrawl,
+            "include_text": exa_include_text,
+            "exclude_text": exa_exclude_text,
+        }
 
     file_name = st.text_input("导出文件名", f"高管战报_{datetime.date.today()}")
 
@@ -820,8 +1022,9 @@ if not st.session_state.report_ready:
         st.markdown("💡 **操作指南**：输入追踪对象，多个目标请使用 `\\` 分开，系统会并发执行独立分析。")
         query_input = st.text_input("输入追踪对象", "Apple \\ Google")
         start_btn = st.button("🚀 启动并发战情推演", type="primary", key="btn_company")
+        active_search_provider, search_notices = resolve_search_provider(search_provider, tavily_key, exa_key)
 
-        if start_btn and api_key and tavily_key:
+        if start_btn and api_key and active_search_provider:
             topics = [topic.strip() for topic in query_input.split("\\") if topic.strip()]
             ai, light_ai, ai_notices = build_ai_stack(
                 api_key,
@@ -837,6 +1040,9 @@ if not st.session_state.report_ready:
             st.info(f"🔎 正在启动并发处理引擎，目标数：{len(topics)}")
             for notice in ai_notices:
                 st.caption(notice)
+            st.caption(f"本次搜索引擎：{format_search_provider_label(active_search_provider)}")
+            for notice in search_notices:
+                st.caption(notice)
 
             def process_company_task(topic, index):
                 try:
@@ -849,6 +1055,9 @@ if not st.session_state.report_ready:
                         time_limit_dict[time_opt],
                         tavily_key,
                         company_pack=company_pack,
+                        search_provider=active_search_provider,
+                        exa_key=exa_key,
+                        exa_settings=exa_search_settings,
                     )
                     if not raw_results:
                         empty_warning = f"未召回到符合条件的 {topic} 新闻，请扩大搜索源或放宽时间范围。"
@@ -988,6 +1197,10 @@ if not st.session_state.report_ready:
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
+        elif start_btn and not api_key:
+            st.error("当前没有检测到 DEEPSEEK_API_KEY，无法启动主分析链路。")
+        elif start_btn and not active_search_provider:
+            st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
 
     with tab2:
         st.markdown(
@@ -1011,6 +1224,7 @@ if not st.session_state.report_ready:
             )
 
         industry_topics = get_industry_topics()
+        active_search_provider, search_notices = resolve_search_provider(search_provider, tavily_key, exa_key)
 
         def run_industry_pipeline(industry_topic_list, domain_text, china_mode=False, query_suffix=""):
             ai, light_ai, ai_notices = build_ai_stack(
@@ -1031,6 +1245,9 @@ if not st.session_state.report_ready:
                 st.info("🔎 正在启动全域多路扫描并发引擎，请稍候。")
             for notice in ai_notices:
                 st.caption(notice)
+            st.caption(f"本次搜索引擎：{format_search_provider_label(active_search_provider)}")
+            for notice in search_notices:
+                st.caption(notice)
 
             def process_industry_task(topic_pack, index):
                 try:
@@ -1049,6 +1266,9 @@ if not st.session_state.report_ready:
                             time_limit_dict[time_opt],
                             max_results=16,
                             tavily_key=tavily_key,
+                            provider=active_search_provider,
+                            exa_key=exa_key,
+                            exa_settings=exa_search_settings,
                         )
                         if china_mode:
                             results = filter_china_results(results, effective_domains, require_chinese_text=True)
@@ -1189,15 +1409,19 @@ if not st.session_state.report_ready:
         with col_cn:
             start_cn_industry_btn = st.button("🇨🇳 一键并发生成《中国公司中文站点专题》", type="secondary", key="btn_industry_cn")
 
-        if start_industry_btn and api_key and tavily_key:
+        if start_industry_btn and api_key and active_search_provider:
             all_deep_data, all_timeline_data, active_model_name = run_industry_pipeline(industry_topics, search_domain, china_mode=False)
             if all_deep_data or all_timeline_data:
                 store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name)
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
+        elif start_industry_btn and not api_key:
+            st.error("当前没有检测到 DEEPSEEK_API_KEY，无法启动主分析链路。")
+        elif start_industry_btn and not active_search_provider:
+            st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
 
-        if start_cn_industry_btn and api_key and tavily_key:
+        if start_cn_industry_btn and api_key and active_search_provider:
             all_deep_data, all_timeline_data, active_model_name = run_industry_pipeline(
                 industry_topics,
                 china_sites,
@@ -1209,6 +1433,10 @@ if not st.session_state.report_ready:
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
+        elif start_cn_industry_btn and not api_key:
+            st.error("当前没有检测到 DEEPSEEK_API_KEY，无法启动主分析链路。")
+        elif start_cn_industry_btn and not active_search_provider:
+            st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
 
 else:
     if not st.session_state.report_celebrated:
