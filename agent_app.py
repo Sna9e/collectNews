@@ -297,11 +297,13 @@ def format_model_stack_name(heavy_driver, light_driver):
     return heavy_driver.label
 
 
+
 def normalize_search_provider(provider):
     provider_key = str(provider or DEFAULT_SEARCH_PROVIDER).strip().lower()
     if provider_key in {"tavily", "exa", "hybrid"}:
         return provider_key
     return DEFAULT_SEARCH_PROVIDER
+
 
 
 def format_search_provider_label(provider):
@@ -311,6 +313,7 @@ def format_search_provider_label(provider):
         "hybrid": "Exa + Tavily",
     }
     return labels.get(normalize_search_provider(provider), "Tavily")
+
 
 
 def format_search_provider_option(provider):
@@ -341,6 +344,7 @@ def resolve_gemini_model_name(selected_model, custom_model, fallback_model):
     return str(selected_model or fallback_model).strip() or fallback_model
 
 
+
 def apply_exa_default_preset():
     st.session_state.search_provider = DEFAULT_SEARCH_PROVIDER
     st.session_state.exa_search_type = DEFAULT_EXA_SEARCH_TYPE
@@ -351,6 +355,7 @@ def apply_exa_default_preset():
     st.session_state.exa_text_chars = DEFAULT_EXA_TEXT_CHARS
     st.session_state.exa_include_text = DEFAULT_EXA_INCLUDE_TEXT
     st.session_state.exa_exclude_text = DEFAULT_EXA_EXCLUDE_TEXT
+
 
 
 def apply_exa_hardtech_preset():
@@ -370,6 +375,7 @@ def apply_gemini_31_flash_lite_main_preset():
     st.session_state.use_gemini_main = True
     st.session_state.gemini_main_model = "__custom__"
     st.session_state.gemini_main_model_custom = GEMINI_31_FLASH_LITE_PRESET
+
 
 
 def build_run_metadata(requested_provider, resolved_provider, notices, diagnostics):
@@ -392,6 +398,7 @@ def build_run_metadata(requested_provider, resolved_provider, notices, diagnosti
         "diagnostics": diagnostics,
         "fallback_triggered": bool(fallback_triggered),
     }
+
 
 
 def render_search_runtime_panel(run_metadata):
@@ -435,6 +442,7 @@ def render_search_runtime_panel(run_metadata):
         st.caption(f"最近一次失败：{provider_label} | {failure_detail}")
 
 
+
 def resolve_search_provider(selected_provider, tavily_key, exa_key):
     provider = normalize_search_provider(selected_provider)
     notices = []
@@ -476,12 +484,14 @@ class FinanceCatalysts(BaseModel):
     style: str = Field(description="【市场风格轮动】限40字")
 
 
+
 def get_finance_catalysts(ai_driver, topic, news_text):
     prompt = (
         f"你是中金投研分析师。请基于以下关于【{topic}】的新闻，"
         f"提炼近期二级市场的核心催化剂：\n{news_text}"
     )
     return ai_driver.analyze_structural(prompt, FinanceCatalysts)
+
 
 
 def finance_fallback_payload(msg="Finance engine temporarily unavailable"):
@@ -505,10 +515,12 @@ def finance_fallback_payload(msg="Finance engine temporarily unavailable"):
     }
 
 
+
 def get_value(item, key, default=""):
     if isinstance(item, dict):
         return item.get(key, default)
     return getattr(item, key, default)
+
 
 
 def format_extraction_stats(stats):
@@ -518,6 +530,7 @@ def format_extraction_stats(stats):
         f"网页直连 {int(stats.get('direct_html_count', 0) or 0)} | "
         f"摘要兜底 {int(stats.get('snippet_count', 0) or 0)}"
     )
+
 
 
 def format_freshness_stats(stats):
@@ -532,235 +545,336 @@ def format_freshness_stats(stats):
     )
 
 
+
 def audit_results_for_freshness(raw_results, time_flag, current_dt):
     enabled = time_flag == "d"
-    return audit_recent_news_results(raw_results, now=current_dt, enabled=enabled)
+    return audit_recent_news_results(
+        raw_results,
+        now=current_dt,
+        max_age_hours=30,
+        future_tolerance_hours=6,
+        enabled=enabled,
+    )
+
+
+
+def build_lookup_maps(raw_results):
+    snippet_lookup = {}
+    title_lookup = {}
+    for item in raw_results or []:
+        url = item.get("url")
+        if not url:
+            continue
+        title_lookup[url] = item.get("title", "")
+        published_text = item.get("published_at_resolved") or item.get("published_date") or item.get("published") or ""
+        snippet_body = item.get("content", "")
+        snippet_lookup[url] = (
+            f"发布时间:{published_text} | 摘要:{snippet_body}"
+            if published_text else snippet_body
+        )
+    return title_lookup, snippet_lookup
+
+
+
+def dedupe_news_items(news_items):
+    deduped_news = []
+    seen_event_ids = set()
+    seen_urls = set()
+    seen_title_keys = []
+    for news in news_items or []:
+        event_id = getattr(news, "event_id", "") or ""
+        url = getattr(news, "url", "") or ""
+        title = getattr(news, "title", "") or ""
+        date_check = getattr(news, "date_check", "") or ""
+        source = getattr(news, "source", "") or ""
+        title_key = f"{title}|{date_check}|{source}"
+
+        if event_id and event_id in seen_event_ids:
+            continue
+        if url and url in seen_urls:
+            continue
+        if any(difflib.SequenceMatcher(None, title_key, existing).ratio() > 0.82 for existing in seen_title_keys):
+            continue
+
+        deduped_news.append(news)
+        if event_id:
+            seen_event_ids.add(event_id)
+        if url:
+            seen_urls.add(url)
+        seen_title_keys.append(title_key)
+    return deduped_news
+
+
+
+def sort_results_by_recency(results):
+    return sorted(
+        list(results or []),
+        key=lambda item: item.get("published_at_resolved") or item.get("published_date") or "",
+        reverse=True,
+    )
+
+
+
+def _serialize_event_blueprints(event_blueprints):
+    payload = []
+    for event in event_blueprints or []:
+        if isinstance(event, dict):
+            payload.append(dict(event))
+        elif hasattr(event, "model_dump"):
+            payload.append(event.model_dump())
+    return payload
+
+
+
+def _normalize_match_text(text):
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(text or "").lower().strip())
+
+
+
+def _tokenize_match_text(text):
+    words = {token.lower() for token in re.findall(r"[a-z0-9]{2,}", str(text or "").lower())}
+    chars = [ch for ch in str(text or "") if re.match(r"[\u4e00-\u9fff]", ch)]
+    if len(chars) < 2:
+        return words | set(chars)
+    return words | {"".join(chars[idx:idx + 2]) for idx in range(len(chars) - 1)}
+
+
+
+def _score_result_for_event(event_dict, result):
+    event_text = str(event_dict.get("event", "") or "")
+    keywords = " ".join(event_dict.get("keywords", []) or [])
+    title = str(result.get("title", "") or "")
+    snippet = str(result.get("content", "") or "")[:220]
+    if not event_text.strip():
+        return 0.0
+
+    event_norm = _normalize_match_text(event_text)
+    title_norm = _normalize_match_text(title)
+    ratio = difflib.SequenceMatcher(None, event_norm, title_norm).ratio() if event_norm and title_norm else 0.0
+    event_tokens = _tokenize_match_text(f"{event_text} {keywords}")
+    result_tokens = _tokenize_match_text(f"{title} {snippet}")
+    overlap = len(event_tokens & result_tokens) / max(len(event_tokens), 1)
+    keyword_hits = sum(
+        1
+        for token in event_dict.get("keywords", []) or []
+        if token and str(token).lower() in f"{title} {snippet}".lower()
+    )
+    return round(ratio * 0.52 + overlap * 0.34 + min(keyword_hits * 0.07, 0.21), 4)
+
+
+
+def select_analysis_candidates(event_blueprints, raw_results, max_events=ANALYSIS_EVENT_LIMIT, max_urls=COMPANY_CRAWL_URL_LIMIT):
+    blueprint_payload = _serialize_event_blueprints(event_blueprints)
+    ranked_results = sort_results_by_recency(raw_results)
+    if not blueprint_payload or not ranked_results:
+        return blueprint_payload[:max_events], ranked_results[:max_urls]
+
+    scored_blueprints = []
+    for index, event_dict in enumerate(blueprint_payload):
+        scored_results = []
+        for result in ranked_results:
+            score = _score_result_for_event(event_dict, result)
+            if score >= 0.24:
+                scored_results.append((score, result))
+        if not scored_results:
+            continue
+        scored_results.sort(
+            key=lambda item: (item[0], item[1].get("published_at_resolved") or item[1].get("published_date") or ""),
+            reverse=True,
+        )
+        scored_blueprints.append(
+            {
+                "index": index,
+                "event": event_dict,
+                "results": [item[1] for item in scored_results[:2]],
+                "support_count": len(scored_results),
+                "top_score": scored_results[0][0],
+                "latest_time": max(
+                    (item[1].get("published_at_resolved") or item[1].get("published_date") or "")
+                    for item in scored_results
+                ),
+            }
+        )
+
+    if not scored_blueprints:
+        return blueprint_payload[:max_events], ranked_results[:max_urls]
+
+    scored_blueprints.sort(
+        key=lambda row: (row["support_count"], row["top_score"], row["latest_time"], -row["index"]),
+        reverse=True,
+    )
+    chosen_rows = scored_blueprints[:max_events]
+    chosen_event_ids = {row["event"].get("event_id", "") for row in chosen_rows if row["event"].get("event_id")}
+    if chosen_event_ids:
+        candidate_events = [
+            event_dict for event_dict in blueprint_payload
+            if event_dict.get("event_id", "") in chosen_event_ids
+        ][:max_events]
+    else:
+        chosen_indexes = {row["index"] for row in chosen_rows}
+        candidate_events = [
+            event_dict for idx, event_dict in enumerate(blueprint_payload)
+            if idx in chosen_indexes
+        ][:max_events]
+
+    selected_results = []
+    seen_urls = set()
+    for pass_index in range(2):
+        for row in chosen_rows:
+            if pass_index >= len(row["results"]) or len(selected_results) >= max_urls:
+                continue
+            result = row["results"][pass_index]
+            url = result.get("url", "")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            selected_results.append(result)
+            if len(selected_results) >= max_urls:
+                break
+
+    for result in ranked_results:
+        if len(selected_results) >= max_urls:
+            break
+        url = result.get("url", "")
+        if url and url in seen_urls:
+            continue
+        if url:
+            seen_urls.add(url)
+        selected_results.append(result)
+
+    return candidate_events or blueprint_payload[:max_events], selected_results[:max_urls]
+
+
+
+def should_show_matched_title(event_text, matched_title):
+    left = str(event_text or "").strip().lower()
+    right = str(matched_title or "").strip().lower()
+    if not left or not right:
+        return bool(right)
+    ratio = difflib.SequenceMatcher(None, left, right).ratio()
+    return ratio < 0.72 and left not in right and right not in left
+
+
+
+def collect_company_search_results(
+    topic,
+    sites_text,
+    time_flag,
+    tavily_key,
+    company_pack=None,
+    search_provider=DEFAULT_SEARCH_PROVIDER,
+    exa_key="",
+    exa_settings=None,
+):
+    company_pack = company_pack or get_company_query_pack(topic)
+    merged_results = []
+    seen_urls = set()
+    normalized_sites_text = str(sites_text or "").strip()
+    default_sites_text = str(get_default_sites_text() or "").strip()
+    use_custom_domain_filter = bool(normalized_sites_text) and normalized_sites_text != default_sites_text
+    effective_sites = (
+        merge_sites_text(normalized_sites_text, company_pack.get("domains", []))
+        if use_custom_domain_filter else ""
+    )
+    per_query_limit = 18 if company_pack.get("id") != "generic" else 16
+    for query in build_company_queries_from_pack(topic, company_pack):
+        batch = search_web(
+            query,
+            effective_sites,
+            time_flag,
+            max_results=per_query_limit,
+            tavily_key=tavily_key,
+            provider=search_provider,
+            exa_key=exa_key,
+            exa_settings=exa_settings,
+        )
+        for item in batch or []:
+            url = item.get("url")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            merged_results.append(item)
+    rank_limit = 60 if company_pack.get("id") != "generic" else 48
+    return rank_results_by_company_pack(merged_results, company_pack, limit=rank_limit)
+
+
+
+def collect_source_material(raw_results, max_urls, jina_key, max_chars_per_source=MAX_SOURCE_CHARS_PER_URL):
+    urls_to_scrape = [item.get("url") for item in raw_results if item.get("url")][:max_urls]
+    title_lookup, snippet_lookup = build_lookup_maps(raw_results)
+    crawl_result = safe_run_async_crawler(
+        urls=urls_to_scrape,
+        jina_key=jina_key,
+        snippet_lookup=snippet_lookup,
+        title_lookup=title_lookup,
+        max_chars_per_source=max_chars_per_source,
+    )
+    if not crawl_result.get("content"):
+        fallback_snippets = []
+        for item in raw_results[:max_urls]:
+            fallback_snippets.append(
+                f"发布时间:{item.get('published_at_resolved') or item.get('published_date') or ''} | "
+                f"标题:{item.get('title', '')} | 摘要:{item.get('content', '')} | 链接:{item.get('url', '')}"
+            )
+        crawl_result["content"] = "\n\n".join(fallback_snippets)
+        crawl_result["source_mode"] = "search_summary_fallback"
+        if not crawl_result.get("warnings"):
+            crawl_result["warnings"] = [
+                "全文抓取为空，本专题已退回到“搜索摘要分析”模式；当前结果适合看事件脉络，不适合过度解读原文级细节。"
+            ]
+    return crawl_result
+
 
 
 def build_empty_section_payload(topic, warnings=None, freshness_stats=None, focus_tags=None):
     warnings = list(warnings or [])
     freshness_stats = freshness_stats or {}
     focus_tags = list(focus_tags or [])
-    base_warning = "当前时间窗口内没有通过时效审查的有效新闻，系统已保留该专题占位，方便你确认这是‘无合格结果’，而不是专题被静默吞掉。"
-    if base_warning not in warnings:
-        warnings.insert(0, base_warning)
-
-    deep_data = {
+    empty_deep = {
         "topic": topic,
         "data": [],
-        "source_mode": "no_recent_results",
+        "finance": {},
+        "source_mode": "filtered_empty",
         "crawler_valid_count": 0,
         "warnings": warnings,
-        "extraction_stats": {"jina_count": 0, "direct_html_count": 0, "snippet_count": 0},
+        "extraction_stats": {},
         "freshness_stats": freshness_stats,
         "focus_tags": focus_tags,
     }
-    timeline_data = {
+    empty_timeline = {
         "topic": topic,
         "events": [],
         "warnings": warnings,
-        "extraction_stats": {"jina_count": 0, "direct_html_count": 0, "snippet_count": 0},
+        "extraction_stats": {},
         "freshness_stats": freshness_stats,
         "focus_tags": focus_tags,
     }
-    return deep_data, timeline_data
+    return empty_deep, empty_timeline
 
 
-def build_error_section_payload(topic, error_text, warnings=None, freshness_stats=None, focus_tags=None):
-    warnings = list(warnings or [])
-    freshness_stats = freshness_stats or {}
-    focus_tags = list(focus_tags or [])
-    message = f"专题处理失败：{error_text}"
-    warnings.insert(0, message)
-    deep_data = {
-        "topic": topic,
-        "data": [],
-        "source_mode": "processing_error",
-        "crawler_valid_count": 0,
-        "warnings": warnings,
-        "extraction_stats": {"jina_count": 0, "direct_html_count": 0, "snippet_count": 0},
-        "freshness_stats": freshness_stats,
-        "focus_tags": focus_tags,
-        "error": error_text,
-    }
-    timeline_data = {
-        "topic": topic,
-        "events": [],
-        "warnings": warnings,
-        "extraction_stats": {"jina_count": 0, "direct_html_count": 0, "snippet_count": 0},
-        "freshness_stats": freshness_stats,
-        "focus_tags": focus_tags,
-        "error": error_text,
-    }
-    return deep_data, timeline_data
 
-
-def collect_source_material(raw_results, max_urls, jina_key, max_chars_per_source):
-    material_results = list(raw_results or [])[:max_urls]
-    urls = [r.get("url") for r in material_results if r.get("url")]
-    snippet_lookup = {r.get("url"): r.get("content", "") or "" for r in material_results if r.get("url")}
-    title_lookup = {r.get("url"): r.get("title", "") or "" for r in material_results if r.get("url")}
-
-    if not urls:
-        return {
-            "content": "",
-            "valid_count": 0,
-            "source_mode": "search_summary_fallback",
-            "warnings": ["没有可抓取的新闻链接，已退回到摘要级模式。"],
-            "stats": {"jina_count": 0, "direct_html_count": 0, "snippet_count": 0},
-        }
-
-    crawl_result = safe_run_async_crawler(
-        urls,
-        jina_key=jina_key,
-        snippet_lookup=snippet_lookup,
-        title_lookup=title_lookup,
-        max_chars_per_source=max_chars_per_source,
+def build_error_section_payload(topic, error_text, freshness_stats=None, focus_tags=None):
+    return build_empty_section_payload(
+        topic,
+        warnings=[f"专题处理失败：{error_text}"],
+        freshness_stats=freshness_stats,
+        focus_tags=focus_tags,
     )
-    return crawl_result
 
 
-def _result_sort_key(item):
-    published = str(item.get("published_at_resolved") or item.get("published_date") or item.get("published") or "")
-    return published
 
+def store_report_outputs(all_deep_data, all_timeline_data, export_name, model_name, run_metadata=None):
+    linked_deep_data, linked_timeline_data = annotate_report_data(all_deep_data, all_timeline_data)
+    st.session_state.report_data = linked_deep_data
+    st.session_state.timeline_data = linked_timeline_data
+    st.session_state.run_metadata = dict(run_metadata or {})
+    st.session_state.word_path = generate_word(linked_deep_data, linked_timeline_data, export_name, model_name)
+    st.session_state.ppt_path = generate_ppt(linked_deep_data, linked_timeline_data, export_name, model_name)
+    st.session_state.report_ready = True
+    st.session_state.report_celebrated = False
 
-def _normalize_result_url(url):
-    return re.sub(r"#.*$", "", str(url or "").strip().lower())
-
-
-def _score_result_for_blueprint(blueprint, result):
-    event_text = get_value(blueprint, "event", "") or ""
-    source_url = get_value(blueprint, "source_url", "") or ""
-    keywords = list(get_value(blueprint, "keywords", []) or [])
-    title = str(result.get("title") or "")
-    content = str(result.get("content") or "")
-    url = str(result.get("url") or "")
-
-    if source_url and url and _normalize_result_url(source_url) == _normalize_result_url(url):
-        return 1.0
-
-    corpus = f"{title} {content}".lower()
-    event_lower = event_text.lower()
-    score = 0.0
-    if event_lower and event_lower in corpus:
-        score += 0.34
-    if event_text and title:
-        score += difflib.SequenceMatcher(None, event_text.lower(), title.lower()).ratio() * 0.38
-    if keywords:
-        hits = sum(1 for token in keywords if token and token.lower() in corpus)
-        score += min(hits * 0.12, 0.36)
-    return score
-
-
-def select_analysis_candidates(event_blueprints, raw_results, max_events=ANALYSIS_EVENT_LIMIT, max_urls=COMPANY_CRAWL_URL_LIMIT):
-    selected_events = list(event_blueprints or [])[:max_events]
-    selected_results = []
-    seen_urls = set()
-
-    for blueprint in selected_events:
-        scored = sorted(
-            raw_results,
-            key=lambda item: (_score_result_for_blueprint(blueprint, item), _result_sort_key(item)),
-            reverse=True,
-        )
-        best_item = next((item for item in scored if item.get("url") and item.get("url") not in seen_urls and _score_result_for_blueprint(blueprint, item) >= 0.16), None)
-        if best_item:
-            selected_results.append(best_item)
-            seen_urls.add(best_item["url"])
-
-    for item in raw_results:
-        url = item.get("url")
-        if not url or url in seen_urls:
-            continue
-        selected_results.append(item)
-        seen_urls.add(url)
-        if len(selected_results) >= max_urls:
-            break
-
-    selected_results = sorted(selected_results, key=_result_sort_key, reverse=True)[:max_urls]
-    return selected_events, selected_results
-
-
-def dedupe_news_items(news_items):
-    deduped = []
-    seen_event_ids = set()
-    seen_urls = set()
-    seen_title_keys = set()
-
-    for item in news_items or []:
-        event_id = get_value(item, "event_id", "") or ""
-        url = _normalize_result_url(get_value(item, "url", ""))
-        title_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(get_value(item, "title", "") or "").lower())
-
-        if event_id and event_id in seen_event_ids:
-            continue
-        if url and url in seen_urls:
-            continue
-        if title_key and title_key in seen_title_keys and len(title_key) >= 16:
-            continue
-
-        deduped.append(item)
-        if event_id:
-            seen_event_ids.add(event_id)
-        if url:
-            seen_urls.add(url)
-        if title_key:
-            seen_title_keys.add(title_key)
-
-    return deduped
-
-
-def render_quality_panel(report_data, timeline_data):
-    st.markdown("### 抓取质量面板")
-    if not report_data and not timeline_data:
-        st.info("当前没有可展示的抓取统计。")
-        return
-
-    timeline_lookup = {
-        get_value(section, "topic", ""): section
-        for section in (timeline_data or [])
-    }
-
-    for section in report_data or []:
-        topic = get_value(section, "topic", "未命名专题")
-        stats = get_value(section, "extraction_stats", {}) or {}
-        freshness_stats = get_value(section, "freshness_stats", {}) or {}
-        warnings = list(get_value(section, "warnings", []) or [])
-        total = max(
-            int(stats.get("jina_count", 0) or 0)
-            + int(stats.get("direct_html_count", 0) or 0)
-            + int(stats.get("snippet_count", 0) or 0),
-            1,
-        )
-        jina_pct = int(round((int(stats.get("jina_count", 0) or 0) / total) * 100))
-        direct_pct = int(round((int(stats.get("direct_html_count", 0) or 0) / total) * 100))
-        snippet_pct = max(0, 100 - jina_pct - direct_pct)
-
-        st.markdown(f"**{topic}**")
-        st.caption(format_extraction_stats(stats))
-        bar_html = f"""
-        <div style='display:flex;width:100%;height:14px;border-radius:999px;overflow:hidden;background:#eef2ff;margin:4px 0 8px 0;'>
-            <div style='width:{jina_pct}%;background:#2563eb'></div>
-            <div style='width:{direct_pct}%;background:#f97316'></div>
-            <div style='width:{snippet_pct}%;background:#9ca3af'></div>
-        </div>
-        <div style='font-size:12px;color:#334155;'>Jina全文 {jina_pct}% ｜ 网页直连 {direct_pct}% ｜ 摘要兜底 {snippet_pct}%</div>
-        """
-        st.markdown(bar_html, unsafe_allow_html=True)
-
-        freshness_line = format_freshness_stats(freshness_stats)
-        if freshness_line:
-            st.caption(freshness_line)
-
-        timeline_section = timeline_lookup.get(topic)
-        if timeline_section and get_value(timeline_section, "warnings", []):
-            timeline_warnings = list(get_value(timeline_section, "warnings", []))
-            if not warnings:
-                warnings = timeline_warnings
-
-        if warnings:
-            st.caption("提示：" + "；".join(warnings[:2]))
 
 
 def reset_report_state():
@@ -773,349 +887,399 @@ def reset_report_state():
     st.session_state.report_celebrated = False
 
 
-def render_timeline_preview(timeline_sections):
-    if not timeline_sections:
-        st.info("暂无核心时间线可预览。")
+
+def render_timeline_preview(timeline_data):
+    if not timeline_data:
+        st.caption("暂无可展示的核心时间线。")
         return
 
-    for t_data in timeline_sections:
-        if t_data is None:
-            continue
-        topic = get_value(t_data, "topic", "未知主题")
-        focus_tags = list(get_value(t_data, "focus_tags", []) or [])
-        focus_line = "、".join(focus_tags[:8]) if focus_tags else "未配置"
-        stats = get_value(t_data, "extraction_stats", {}) or {}
-        freshness_line = format_freshness_stats(get_value(t_data, "freshness_stats", {}) or {})
-        warnings = list(get_value(t_data, "warnings", []) or [])
-        events = get_value(t_data, "events", []) or []
+    for section in timeline_data:
+        topic = get_value(section, "topic", "未命名专题")
+        st.markdown(f"### 专题：{topic}")
+        focus_tags = get_value(section, "focus_tags", [])
+        if focus_tags:
+            st.caption(f"重点标签：{'、'.join(focus_tags[:8])}")
+        extraction_stats = get_value(section, "extraction_stats", {})
+        if extraction_stats:
+            st.caption(f"抓取概况：{format_extraction_stats(extraction_stats)}")
+        freshness_stats = get_value(section, "freshness_stats", {})
+        if freshness_stats:
+            st.caption(format_freshness_stats(freshness_stats))
+        for warning_text in get_value(section, "warnings", []):
+            st.warning(warning_text)
 
-        st.markdown(f"## ⏱️ {topic} - 核心时间线")
-        st.caption(f"重点标签: {focus_line} | {format_extraction_stats(stats)}")
-        if freshness_line:
-            st.caption(freshness_line)
-        if warnings:
-            st.warning(warnings[0])
+        events = get_value(section, "events", [])
         if not events:
-            st.info("暂无有效时间线。")
+            st.caption("暂无有效时间线。")
             continue
 
-        for item in events:
-            timeline_marker = "◆" if get_value(item, "history_status", "") == "followup" else "★"
-            timeline_label = f"[{get_value(item, 'date', '近期')}] {get_value(item, 'event', '未命名事件')}"
-            source = get_value(item, "source", "")
-            if source:
-                timeline_label += f" ({source})"
-            st.markdown(f"{timeline_marker} {timeline_label}")
-            if get_value(item, "history_status", "") == "followup":
-                history_line = f"↳ 历史追踪: 首次记录 {get_value(item, 'first_seen', '未知')} / 累计 {get_value(item, 'seen_count', 0)} 次"
-                st.caption(history_line)
+        for event in events:
+            date_text = html.escape(str(get_value(event, "date", "近期")))
+            event_text = html.escape(str(get_value(event, "event", "未命名事件")))
+            source_text = html.escape(str(get_value(event, "source", "未知来源")))
+            appears_later = bool(get_value(event, "appears_in_later_news", False))
+            matched_title = html.escape(str(get_value(event, "matched_news_title", "")))
+            match_reason = html.escape(str(get_value(event, "match_reason", "")))
+            history_status = str(get_value(event, "history_status", "") or "")
+            first_seen = html.escape(str(get_value(event, "first_seen", "")))
+            seen_count = int(get_value(event, "seen_count", 0) or 0)
+
+            border_color = "#f59e0b" if appears_later else "#cbd5e1"
+            background = "#fff7ed" if appears_later else "#f8fafc"
+            badge_html = ""
+            if appears_later:
+                badge_html += (
+                    "<span style='display:inline-block;margin-left:8px;padding:2px 8px;"
+                    "border-radius:999px;background:#f59e0b;color:#fff;font-size:12px;'>"
+                    "后续长新闻已展开</span>"
+                )
+            if history_status == "followup":
+                badge_html += (
+                    "<span style='display:inline-block;margin-left:8px;padding:2px 8px;"
+                    "border-radius:999px;background:#0f766e;color:#fff;font-size:12px;'>"
+                    "历史事件延续</span>"
+                )
+
+            history_html = ""
+            if history_status == "followup":
+                history_html = (
+                    f"<div style='margin-top:4px;color:#0f766e;'><strong>历史追踪：</strong>"
+                    f"首次记录 {first_seen or '未知'}，累计追踪 {max(seen_count, 1)} 次</div>"
+                )
+
+            detail_html = ""
+            if appears_later:
+                matched_news_line = "已在后续长新闻中展开"
+                if should_show_matched_title(event_text, matched_title):
+                    matched_news_line = matched_title
+                detail_html = (
+                    f"<div style='margin-top:8px;color:#7c2d12;'><strong>对应长新闻：</strong>{matched_news_line}</div>"
+                    f"<div style='margin-top:4px;color:#7c2d12;'><strong>出现原因：</strong>{match_reason}</div>"
+                )
+
+            st.markdown(
+                (
+                    f"<div style='border-left:4px solid {border_color};background:{background};"
+                    "padding:12px 14px;margin:10px 0;border-radius:10px;'>"
+                    f"<div style='font-weight:700;color:#0f172a;'>[{date_text}] {event_text}{badge_html}</div>"
+                    f"<div style='margin-top:4px;color:#475569;'>来源：{source_text}</div>"
+                    f"{history_html}"
+                    f"{detail_html}"
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
 
 
-def render_deep_news_preview(report_sections):
-    if not report_sections:
-        st.info("暂无深度新闻可预览。")
+
+def render_deep_news_preview(report_data):
+    if not report_data:
+        st.caption("暂无可展示的深度新闻。")
         return
 
-    for section in report_sections:
-        if section is None:
+    for section in report_data:
+        topic = get_value(section, "topic", "未命名专题")
+        st.markdown(f"### 深度研报：{topic}")
+        focus_tags = get_value(section, "focus_tags", [])
+        if focus_tags:
+            st.caption(f"重点标签：{'、'.join(focus_tags[:8])}")
+        extraction_stats = get_value(section, "extraction_stats", {})
+        if extraction_stats:
+            st.caption(f"抓取概况：{format_extraction_stats(extraction_stats)}")
+        freshness_stats = get_value(section, "freshness_stats", {})
+        if freshness_stats:
+            st.caption(format_freshness_stats(freshness_stats))
+        for warning_text in get_value(section, "warnings", []):
+            st.warning(warning_text)
+
+        news_items = get_value(section, "data", [])
+        if not news_items:
+            st.caption("当前专题暂无符合标准的深度新闻。")
             continue
-        topic = get_value(section, "topic", "未知主题")
-        focus_tags = list(get_value(section, "focus_tags", []) or [])
-        stats = get_value(section, "extraction_stats", {}) or {}
-        source_mode = get_value(section, "source_mode", "full_text")
-        freshness_line = format_freshness_stats(get_value(section, "freshness_stats", {}) or {})
-        warnings = list(get_value(section, "warnings", []) or [])
-        news_list = get_value(section, "data", []) or []
 
-        st.markdown(f"## 📰 {topic} - 深度新闻")
-        st.caption(f"重点标签: {'、'.join(focus_tags[:8]) if focus_tags else '未配置'} | {format_extraction_stats(stats)} | 模式: {source_mode}")
-        if freshness_line:
-            st.caption(freshness_line)
-        if warnings:
-            st.warning(warnings[0])
-        if not news_list:
-            st.info("暂无有效长新闻。")
-            continue
+        for news in news_items:
+            title = get_value(news, "title", "未命名情报")
+            source = get_value(news, "source", "未知来源")
+            date_text = get_value(news, "date_check", "近期")
+            importance = int(get_value(news, "importance", 3) or 3)
+            summary = get_value(news, "summary", "暂无详情")
+            news_url = get_value(news, "url", "")
+            timeline_refs = get_value(news, "timeline_refs", [])
+            event_id = get_value(news, "event_id", "")
 
-        for news in news_list:
-            st.markdown(f"### {get_value(news, 'title', '未命名情报')}")
-            meta = f"来源: {get_value(news, 'source', '未知网络')} | 时间: {get_value(news, 'date_check', '近期')} | 热度: {get_value(news, 'importance', 3)}"
-            st.caption(meta)
-            st.markdown(get_value(news, "summary", "暂无详情"))
-            url = get_value(news, "url", "")
-            if url:
-                st.markdown(f"[查看原文]({url})")
+            with st.container(border=True):
+                st.markdown(f"#### {title}")
+                meta_parts = [f"来源：{source}", f"时间：{date_text}", f"热度：{'⭐' * max(1, importance)}"]
+                if event_id:
+                    meta_parts.append(f"事件ID：{event_id}")
+                st.caption(" | ".join(meta_parts))
 
+                if timeline_refs:
+                    st.warning("这条长新闻承接了核心时间线中的短新闻，下面是匹配原因：")
+                    for ref in timeline_refs:
+                        ref_date = get_value(ref, "date", "近期")
+                        ref_event = get_value(ref, "event", "未命名事件")
+                        ref_reason = get_value(ref, "reason", "")
+                        st.markdown(f"- `[{ref_date}]` {ref_event}")
+                        if ref_reason:
+                            st.caption(f"原因：{ref_reason}")
 
-def annotate_and_store_data(report_data, timeline_data):
-    linked_deep_data, linked_timeline_data = annotate_report_data(report_data, timeline_data)
-    st.session_state.report_data = linked_deep_data
-    st.session_state.timeline_data = linked_timeline_data
-    return linked_deep_data, linked_timeline_data
+                st.markdown(summary.replace("\n", "  \n"))
+                if news_url:
+                    st.markdown(f"[查看原文]({news_url})")
 
 
-def store_report_outputs(report_data, timeline_data, export_name, model_name, run_metadata=None):
-    linked_deep_data, linked_timeline_data = annotate_and_store_data(report_data, timeline_data)
-    st.session_state.word_path = generate_word(linked_deep_data, linked_timeline_data, export_name, model_name)
-    st.session_state.ppt_path = generate_ppt(linked_deep_data, linked_timeline_data, export_name, model_name)
-    st.session_state.report_ready = True
-    st.session_state.report_celebrated = False
-    st.session_state.run_metadata = dict(run_metadata or {})
+def render_quality_panel(report_data, timeline_data):
+    sections = []
+    seen_topics = set()
+    for collection in (report_data or [], timeline_data or []):
+        for section in collection:
+            topic = get_value(section, "topic", "未命名专题")
+            if topic in seen_topics:
+                continue
+            sections.append(section)
+            seen_topics.add(topic)
+
+    visible_sections = []
+    for section in sections:
+        extraction_stats = get_value(section, "extraction_stats", {})
+        freshness_stats = get_value(section, "freshness_stats", {})
+        if extraction_stats or freshness_stats:
+            visible_sections.append(section)
+
+    if not visible_sections:
+        return
+
+    st.markdown("### 抓取质量面板")
+    st.caption("每个专题都会显示 Jina 全文、网页直连、摘要兜底的占比，以及 24h 新鲜度审查结果。")
+
+    for section in visible_sections:
+        topic = html.escape(str(get_value(section, "topic", "未命名专题")))
+        extraction_stats = get_value(section, "extraction_stats", {})
+        freshness_stats = get_value(section, "freshness_stats", {})
+        jina_count = int(extraction_stats.get("jina_count", 0) or 0)
+        direct_count = int(extraction_stats.get("direct_html_count", 0) or 0)
+        snippet_count = int(extraction_stats.get("snippet_count", 0) or 0)
+        total = max(jina_count + direct_count + snippet_count, 1)
+        freshness_text = html.escape(format_freshness_stats(freshness_stats))
+        warning_text = html.escape(str((get_value(section, "warnings", []) or [""])[0]))
+
+        segments = []
+        for label, count, color in (
+            ("Jina全文", jina_count, "#0f766e"),
+            ("网页直连", direct_count, "#2563eb"),
+            ("摘要兜底", snippet_count, "#d97706"),
+        ):
+            width = 0 if total <= 0 else round(count * 100 / total, 1)
+            if width <= 0:
+                continue
+            segments.append(
+                f"<div style='height:100%;width:{width}%;background:{color};'></div>"
+            )
+
+        legend_html = " ".join([
+            f"<span style='margin-right:12px;color:#0f172a;'><strong>Jina全文</strong> {jina_count}</span>",
+            f"<span style='margin-right:12px;color:#0f172a;'><strong>网页直连</strong> {direct_count}</span>",
+            f"<span style='margin-right:12px;color:#0f172a;'><strong>摘要兜底</strong> {snippet_count}</span>",
+        ])
+
+        st.markdown(
+            (
+                "<div style='border:1px solid #e2e8f0;border-radius:14px;padding:14px 16px;margin:10px 0;background:#ffffff;'>"
+                f"<div style='font-weight:700;color:#0f172a;font-size:16px;margin-bottom:8px;'>{topic}</div>"
+                f"<div style='height:14px;background:#e5e7eb;border-radius:999px;overflow:hidden;display:flex;margin-bottom:8px;'>{''.join(segments)}</div>"
+                f"<div style='font-size:13px;color:#334155;margin-bottom:6px;'>{legend_html}</div>"
+                f"<div style='font-size:12px;color:#475569;'>{html.escape(format_extraction_stats(extraction_stats))}</div>"
+                + (f"<div style='font-size:12px;color:#475569;margin-top:4px;'>{freshness_text}</div>" if freshness_text else "")
+                + (f"<div style='font-size:12px;color:#b45309;margin-top:4px;'>{warning_text}</div>" if warning_text else "")
+                + "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
 
 
-def try_get_secret(key_name, fallback_env=None):
-    try:
-        value = st.secrets[key_name]
-        if value and not _looks_like_placeholder_secret(value):
-            return str(value).strip()
-    except Exception:
-        pass
-
-    fallback_data = _load_local_secret_fallback()
-    if key_name in fallback_data and not _looks_like_placeholder_secret(fallback_data[key_name]):
-        return str(fallback_data[key_name]).strip()
-
-    env_keys = [fallback_env] if fallback_env else []
-    env_keys.append(key_name)
-    for env_key in env_keys:
-        if not env_key:
-            continue
-        value = os.getenv(env_key, "").strip()
-        if value and not _looks_like_placeholder_secret(value):
-            return value
-    return ""
-
-
-api_key = try_get_secret("DEEPSEEK_API_KEY")
-gemini_key = try_get_secret("GEMINI_API_KEY") or try_get_secret("GOOGLE_API_KEY")
-tavily_key = try_get_secret("TAVILY_API_KEY")
-jina_key = try_get_secret("JINA_API_KEY")
-gh_token = try_get_secret("GITHUB_TOKEN")
-gist_id = try_get_secret("GIST_ID")
-exa_key = try_get_secret("EXA_API_KEY")
-
-st.markdown("""
-<style>
-.stButton>button {
-    border-radius: 14px;
-    padding: 0.55rem 1rem;
-    font-weight: 600;
-}
-html, body, [class*="css"]  { font-family: 'Microsoft YaHei', sans-serif; }
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🧠 商业情报战情室（事件主档统一版）")
-st.markdown("### 📊 频道一：公司追踪（带金融量化）  🌐 频道二：每日宏观行业早报（全球扫描）")
-st.divider()
-
-# Sidebar controls.
 with st.sidebar:
-    st.markdown("## 🧠 部门情报控制台")
-    if api_key or gemini_key:
+    st.header("🧠 部门情报控制台")
+    def _get_runtime_secret(name, default=""):
+        try:
+            value = st.secrets[name]
+            if not _looks_like_placeholder_secret(value):
+                return value
+        except Exception:
+            pass
+
+        env_value = os.getenv(name, "")
+        if not _looks_like_placeholder_secret(env_value):
+            return env_value
+
+        local_fallback = _load_local_secret_fallback().get(name, "")
+        if not _looks_like_placeholder_secret(local_fallback):
+            return local_fallback
+
+        return default
+
+    api_key = _get_runtime_secret("DEEPSEEK_API_KEY", "")
+    gemini_key = _get_runtime_secret("GEMINI_API_KEY", "") or _get_runtime_secret("GOOGLE_API_KEY", "")
+    tavily_key = _get_runtime_secret("TAVILY_API_KEY", "")
+    exa_key = _get_runtime_secret("EXA_API_KEY", "")
+    jina_key = _get_runtime_secret("JINA_API_KEY", "")
+    gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
+    gist_id = _get_runtime_secret("GIST_ID", "")
+    if (api_key or gemini_key) and (tavily_key or exa_key):
         st.success("🔐 部门专属安全引擎已连接")
     else:
-        st.error("未检测到可用模型密钥，请配置 DeepSeek 或 Gemini")
+        st.error("⚠️ 未检测到可用的搜索或模型密钥，请补充 API Key。")
+
     st.divider()
-
-    model_id = st.selectbox(
-        "核心模型",
-        ["deepseek-chat", "deepseek-reasoner"],
-        index=0,
-    )
-
+    model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
     use_gemini_main = st.toggle(
-        "使用 Gemini AI Studio 作为主模型（同 Prompt / 同输出结构）",
-        value=bool(st.session_state.use_gemini_main),
+        "使用 Gemini AI Studio 作为主模型（保留当前 Prompt）",
         key="use_gemini_main",
     )
-    gemini_main_index = 0
-    if st.session_state.gemini_main_model in GEMINI_MODEL_OPTIONS:
-        gemini_main_index = GEMINI_MODEL_OPTIONS.index(st.session_state.gemini_main_model)
-    selected_gemini_main_model = st.selectbox(
+    gemini_main_preset_col1, gemini_main_preset_col2 = st.columns(2)
+    with gemini_main_preset_col1:
+        if st.button("切到 Gemini 3 Flash", key="btn_gemini_3_flash_main", disabled=not gemini_key):
+            apply_gemini_3_flash_main_preset()
+    with gemini_main_preset_col2:
+        if st.button("尝试 3.1 Flash-Lite", key="btn_gemini_31_flash_lite_main", disabled=not gemini_key):
+            apply_gemini_31_flash_lite_main_preset()
+    gemini_main_model_choice = st.selectbox(
         "Gemini 主模型",
         GEMINI_MODEL_OPTIONS,
-        index=gemini_main_index,
         key="gemini_main_model",
-        format_func=format_gemini_model_option,
         disabled=not use_gemini_main,
+        format_func=format_gemini_model_option,
     )
-    gemini_main_custom = st.text_input(
+    gemini_main_model_custom = st.text_input(
         "Gemini 主模型自定义 ID",
-        value=st.session_state.gemini_main_model_custom,
         key="gemini_main_model_custom",
+        disabled=(not use_gemini_main or gemini_main_model_choice != "__custom__"),
         placeholder="例如：gemini-3.1-flash-lite-preview",
-        disabled=(not use_gemini_main) or selected_gemini_main_model != "__custom__",
     )
-    main_preset_col1, main_preset_col2 = st.columns(2)
-    with main_preset_col1:
-        if st.button("切到 Gemini 3 Flash", key="btn_main_gemini3", disabled=not use_gemini_main, use_container_width=True):
-            apply_gemini_3_flash_main_preset()
-            st.rerun()
-    with main_preset_col2:
-        if st.button("尝试 3.1 Flash-Lite", key="btn_main_gemini31lite", disabled=not use_gemini_main, use_container_width=True):
-            apply_gemini_31_flash_lite_main_preset()
-            st.rerun()
-
-    use_gemini_light = st.toggle(
-        "启用 Gemini AI Studio 轻任务引擎（保留当前主功能）",
-        value=bool(st.session_state.use_gemini_light),
-        key="use_gemini_light",
+    gemini_main_model = resolve_gemini_model_name(
+        gemini_main_model_choice,
+        gemini_main_model_custom,
+        DEFAULT_GEMINI_MAIN_MODEL,
     )
-    gemini_light_index = 0
-    if st.session_state.gemini_light_model in GEMINI_MODEL_OPTIONS:
-        gemini_light_index = GEMINI_MODEL_OPTIONS.index(st.session_state.gemini_light_model)
-    selected_gemini_light_model = st.selectbox(
+    if use_gemini_main:
+        if gemini_key:
+            st.caption(
+                "主模型可切到 Gemini AI Studio；这会复用当前同一套 Prompt、输出结构和页面，不改业务链路。"
+                " `Gemini 3.1 Flash-Lite` 这里按公开命名规则做了预设，若你的账号尚未开放该预览 ID，可改回 Gemini 3 Flash 或手动填写。"
+            )
+        else:
+            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为 DeepSeek。")
+    use_gemini_light = st.toggle("启用 Gemini AI Studio 轻任务引擎（保留当前主功能）", key="use_gemini_light")
+    gemini_light_model_choice = st.selectbox(
         "Gemini 轻任务模型",
         GEMINI_MODEL_OPTIONS,
-        index=gemini_light_index,
         key="gemini_light_model",
-        format_func=format_gemini_model_option,
         disabled=not use_gemini_light,
+        format_func=format_gemini_model_option,
     )
-    gemini_light_custom = st.text_input(
+    gemini_light_model_custom = st.text_input(
         "Gemini 轻任务自定义 ID",
-        value=st.session_state.gemini_light_model_custom,
         key="gemini_light_model_custom",
+        disabled=(not use_gemini_light or gemini_light_model_choice != "__custom__"),
         placeholder="例如：gemini-3.1-flash-lite-preview",
-        disabled=(not use_gemini_light) or selected_gemini_light_model != "__custom__",
     )
-    st.caption(
-        "当前按 Google AI Studio 的 OpenAI 兼容接口接入。轻任务包括：事件主档抽取、"
-        "切片候选提取。最终长新闻成稿仍由 DeepSeek 负责。"
+    gemini_light_model = resolve_gemini_model_name(
+        gemini_light_model_choice,
+        gemini_light_model_custom,
+        DEFAULT_GEMINI_LIGHT_MODEL,
     )
-
-    time_opt = st.selectbox("召测时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
-    time_limit_dict = {
-        "过去 24 小时": "d",
-        "过去 1 周": "w",
-        "过去 1 个月": "m",
-    }
-    st.toggle("上市公司金融补链（更耗 token）", value=False, key="enable_finance_chain")
-
-    st.markdown("### 搜索引擎")
-    selected_search_provider = st.selectbox(
-        "主搜索引擎",
+    if use_gemini_light:
+        if gemini_key:
+            st.caption("当前按 Google AI Studio 的 OpenAI 兼容接口接入。轻任务包括：事件主档抽取、切片候选提取。最终长新闻成稿仍由 DeepSeek 负责。")
+        else:
+            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为全 DeepSeek，不影响现有功能。")
+    time_opt = st.selectbox("回溯时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
+    search_provider = st.selectbox(
+        "搜索引擎",
         ["exa", "hybrid", "tavily"],
-        index=["exa", "hybrid", "tavily"].index(st.session_state.search_provider),
         key="search_provider",
         format_func=format_search_provider_option,
     )
-    with st.expander("⚙️ Exa 搜索设置", expanded=False):
+    enable_finance_chain = st.toggle("上市公司金融补链（更耗 token）", value=False)
+    time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m"}
+
+    with st.expander("⚙️ 高级搜索源设置"):
+        sites = st.text_area("重点搜索源", get_default_sites_text(), height=250)
         preset_col1, preset_col2 = st.columns(2)
         with preset_col1:
-            if st.button("恢复 Exa 默认", key="btn_exa_default", use_container_width=True):
+            if st.button("恢复 Exa 默认", key="btn_exa_default"):
                 apply_exa_default_preset()
-                st.rerun()
         with preset_col2:
-            if st.button("硬科技优先预设", key="btn_exa_hardtech", use_container_width=True):
+            if st.button("硬科技优先预设", key="btn_exa_hardtech"):
                 apply_exa_hardtech_preset()
-                st.rerun()
 
+        st.caption("默认已经改为 Exa：`auto + news + highlights`。这套最适合你们当前的科技新闻场景，也更接近 Exa Search 官方支持的稳定参数。")
         exa_search_type = st.selectbox(
             "Exa 搜索类型",
-            ["auto", "fast", "deep"],
-            index=["auto", "fast", "deep"].index(st.session_state.exa_search_type),
+            ["auto", "fast", "instant", "deep"],
             key="exa_search_type",
         )
         exa_category = st.selectbox(
             "Exa 结果类别",
-            ["news", "company", ""],
-            index=["news", "company", ""].index(st.session_state.exa_category),
+            ["news", "", "financial report", "research paper", "personal site"],
             key="exa_category",
-            format_func=lambda value: "默认" if value == "" else value,
+            format_func=lambda item: {
+                "news": "news（推荐）",
+                "": "自动/不强制",
+                "financial report": "financial report",
+                "research paper": "research paper",
+                "personal site": "personal site",
+            }.get(item, item),
         )
-        st.number_input(
-            "Exa 每次查询结果数",
-            min_value=3,
-            max_value=20,
-            step=1,
-            key="exa_result_limit",
-        )
-        st.selectbox(
-            "Exa 搜索内容模式",
-            ["highlights", "text", "highlights_text"],
-            index=["highlights", "text", "highlights_text"].index(st.session_state.exa_content_mode),
+        exa_result_limit = st.number_input("Exa 每次查询结果数", min_value=3, max_value=20, step=1, key="exa_result_limit")
+        exa_content_mode = st.selectbox(
+            "Exa 搜索内容",
+            ["highlights", "highlights_text", "text"],
             key="exa_content_mode",
-            format_func=lambda value: {
-                "highlights": "highlights（推荐）",
-                "text": "text（更长）",
-                "highlights_text": "highlights + text",
-            }[value],
+            format_func=lambda item: {
+                "highlights": "highlights（推荐，最稳）",
+                "highlights_text": "highlights + text（更全，但更贵）",
+                "text": "text（不推荐，容易太重）",
+            }.get(item, item),
         )
-        st.number_input(
-            "Exa highlights 字符上限",
-            min_value=400,
-            max_value=5000,
-            step=100,
-            key="exa_highlights_chars",
-        )
-        st.number_input(
-            "Exa text 字符上限",
-            min_value=800,
-            max_value=10000,
-            step=200,
-            key="exa_text_chars",
-        )
-        st.text_input(
-            "Exa 必含关键词（includeText）",
-            key="exa_include_text",
-            placeholder="例如：chip datacenter optics",
-        )
-        st.text_input(
-            "Exa 排除关键词（excludeText）",
-            key="exa_exclude_text",
-            placeholder="例如：lawsuit court attorney privacy",
-        )
-        st.caption(
-            "推荐默认：auto + news + highlights + 2200 字符。"
-            "重大单一专题再考虑 deep 或 highlights+text。"
-        )
-
-    exa_search_settings = {
-        "search_type": exa_search_type,
-        "category": exa_category,
-        "num_results": int(st.session_state.exa_result_limit),
-        "content_mode": st.session_state.exa_content_mode,
-        "highlights_max_characters": int(st.session_state.exa_highlights_chars),
-        "text_max_characters": int(st.session_state.exa_text_chars),
-        "include_text": st.session_state.exa_include_text,
-        "exclude_text": st.session_state.exa_exclude_text,
-    }
-
-    with st.expander("🔍 高级搜索源设置", expanded=False):
-        sites = st.text_area(
-            "重点搜索源（每行一个域名）",
-            get_default_sites_text(),
-            height=220,
-        )
+        exa_highlights_chars = st.slider("Exa highlights 最大字符数", min_value=800, max_value=4000, step=200, key="exa_highlights_chars")
+        exa_text_chars = st.slider("Exa text 最大字符数", min_value=1200, max_value=8000, step=400, key="exa_text_chars")
+        exa_include_text = st.text_input("Exa 必含关键词（可选，1-5词）", key="exa_include_text")
+        exa_exclude_text = st.text_input("Exa 排除关键词（可选，1-5词）", key="exa_exclude_text")
+        exa_search_settings = {
+            "search_type": exa_search_type,
+            "category": exa_category,
+            "num_results": int(exa_result_limit),
+            "content_mode": exa_content_mode,
+            "highlights_max_characters": int(exa_highlights_chars),
+            "text_max_characters": int(exa_text_chars),
+            "include_text": exa_include_text,
+            "exclude_text": exa_exclude_text,
+        }
 
     file_name = st.text_input("导出文件名", f"高管战报_{datetime.date.today()}")
 
-default_tabs = ["频道一：公司追踪", "频道二：每日宏观行业早报"]
-tab1, tab2 = st.tabs(default_tabs)
+st.title("🧠 商业情报战情室（事件主档统一版）")
 
 if not st.session_state.report_ready:
+    tab1, tab2 = st.tabs(["📚 频道一：公司追踪（带金融量化）", "🌐 频道二：每日宏观行业早报（全域扫描）"])
+
     with tab1:
-        st.markdown("💡 **操作指南**：输入追踪对象，多个目标请使用 `\` 分开，系统会并发执行独立分析。")
-        query = st.text_input("输入追踪对象", "Apple \ Google")
-        start_btn = st.button("🚀 启动并发战情推演", type="primary")
-        active_search_provider, search_notices = resolve_search_provider(selected_search_provider, tavily_key, exa_key)
+        st.markdown("💡 **操作指南**：输入追踪对象，多个目标请使用 `\\` 分开，系统会并发执行独立分析。")
+        query_input = st.text_input("输入追踪对象", "Apple \\ Google")
+        start_btn = st.button("🚀 启动并发战情推演", type="primary", key="btn_company")
+        active_search_provider, search_notices = resolve_search_provider(search_provider, tavily_key, exa_key)
 
         if start_btn and active_search_provider:
-            topics = [item.strip() for item in query.split("\\") if item.strip()]
-            if not topics:
-                st.warning("请输入至少一个有效主题。")
-                st.stop()
-
+            topics = [topic.strip() for topic in query_input.split("\\") if topic.strip()]
             ai, light_ai, ai_notices = build_ai_stack(
                 api_key,
                 model_id,
                 use_gemini_light=use_gemini_light,
                 gemini_key=gemini_key,
-                gemini_model=resolve_gemini_model_name(selected_gemini_light_model, gemini_light_custom, DEFAULT_GEMINI_LIGHT_MODEL),
+                gemini_model=gemini_light_model,
                 use_gemini_main=use_gemini_main,
-                gemini_main_model=resolve_gemini_model_name(selected_gemini_main_model, gemini_main_custom, DEFAULT_GEMINI_MAIN_MODEL),
+                gemini_main_model=gemini_main_model,
             )
             if not ai.valid:
                 st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
@@ -1125,7 +1289,7 @@ if not st.session_state.report_ready:
             mem_manager = GistMemoryManager(gh_token, gist_id)
             mem_manager.load_memory()
             reset_search_diagnostics()
-            st.info(f"🔎 正在启动并发处理引擎，目标数： {len(topics)}")
+            st.info(f"🔎 正在启动并发处理引擎，目标数：{len(topics)}")
             for notice in ai_notices:
                 st.caption(notice)
             st.caption(f"本次搜索引擎：{format_search_provider_label(active_search_provider)}")
@@ -1134,55 +1298,34 @@ if not st.session_state.report_ready:
 
             def process_company_task(topic, index):
                 try:
-                    pack = get_company_query_pack(topic)
-                    pack_queries = build_company_queries_from_pack(topic, pack)
-                    include_domains = ""
-                    if pack and sites.strip() == get_default_sites_text().strip():
-                        include_domains = ""
-                    elif pack:
-                        include_domains = merge_sites_text(sites, pack.get("domains", []))
-                    else:
-                        include_domains = sites
-                    all_raw_results = []
-                    seen_urls = set()
-
-                    for pack_query in pack_queries:
-                        results = search_web(
-                            pack_query,
-                            include_domains,
-                            time_limit_dict[time_opt],
-                            max_results=18 if pack else 14,
-                            tavily_key=tavily_key,
-                            provider=active_search_provider,
-                            exa_key=exa_key,
-                            exa_settings=exa_search_settings,
+                    company_pack = get_company_query_pack(topic)
+                    focus_tags = company_pack.get("keywords", [])[:8]
+                    company_focus_hint = build_company_focus_hint(company_pack)
+                    raw_results = collect_company_search_results(
+                        topic,
+                        sites,
+                        time_limit_dict[time_opt],
+                        tavily_key,
+                        company_pack=company_pack,
+                        search_provider=active_search_provider,
+                        exa_key=exa_key,
+                        exa_settings=exa_search_settings,
+                    )
+                    if not raw_results:
+                        empty_warning = f"未召回到符合条件的 {topic} 新闻，请扩大搜索源或放宽时间范围。"
+                        deep_empty, timeline_empty = build_empty_section_payload(
+                            topic,
+                            warnings=[empty_warning],
+                            focus_tags=focus_tags,
                         )
-                        ranked = rank_results_by_company_pack(results, topic, pack, limit=18 if pack else 12)
-                        for item in ranked:
-                            url = item.get("url")
-                            if url and url not in seen_urls:
-                                seen_urls.add(url)
-                                all_raw_results.append(item)
-
-                    if not all_raw_results:
-                        return index, None, None
-
-                    focus_tags = list(dict.fromkeys((pack or {}).get("tags", [])))
-                    if pack:
-                        focus_tags.extend([keyword for keyword in pack.get("priority_terms", []) if keyword not in focus_tags])
-                        all_raw_results = rank_results_by_company_pack(all_raw_results, topic, pack, limit=60)
-                    all_raw_results, freshness_stats, freshness_warnings = audit_results_for_freshness(
-                        all_raw_results,
+                        return index, deep_empty, timeline_empty
+                    raw_results, freshness_stats, freshness_warnings = audit_results_for_freshness(
+                        raw_results,
                         time_limit_dict[time_opt],
                         current_dt,
                     )
-                    all_raw_results = sorted(
-                        all_raw_results,
-                        key=lambda item: item.get("published_at_resolved") or item.get("published_date") or item.get("published") or "",
-                        reverse=True,
-                    )
-                    all_raw_results = rank_results_by_company_pack(all_raw_results, topic, pack, limit=40)
-                    if not all_raw_results:
+                    raw_results = rank_results_by_company_pack(raw_results, company_pack, limit=40)
+                    if not raw_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic,
                             warnings=freshness_warnings,
@@ -1190,8 +1333,8 @@ if not st.session_state.report_ready:
                             focus_tags=focus_tags,
                         )
                         return index, deep_empty, timeline_empty
-                    focus_hint = build_company_focus_hint(topic, pack)
-                    event_seed_results = all_raw_results[:EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY]
+
+                    event_seed_results = raw_results[:EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY]
                     history_hint = mem_manager.get_event_bank_summary(topic, limit=4)
                     event_blueprints = build_event_blueprints(
                         ai,
@@ -1200,20 +1343,19 @@ if not st.session_state.report_ready:
                         current_date_str,
                         time_opt,
                         history_hint=history_hint,
-                        guidance=focus_hint,
+                        guidance=company_focus_hint,
                     )
                     event_blueprints = mem_manager.bind_event_blueprints(topic, event_blueprints, current_date_str)
                     timeline_events = generate_timeline(event_blueprints)
                     analysis_events, analysis_results = select_analysis_candidates(
                         event_blueprints,
-                        all_raw_results,
+                        raw_results,
                         max_events=ANALYSIS_EVENT_LIMIT,
                         max_urls=COMPANY_CRAWL_URL_LIMIT,
                     )
-                    crawl_limit = 22 if pack else 18
                     crawl_result = collect_source_material(
                         analysis_results,
-                        max_urls=crawl_limit,
+                        max_urls=COMPANY_CRAWL_URL_LIMIT,
                         jina_key=jina_key,
                         max_chars_per_source=MAX_SOURCE_CHARS_PER_URL,
                     )
@@ -1228,7 +1370,7 @@ if not st.session_state.report_ready:
                         past_memories,
                         event_blueprints=analysis_events,
                         source_mode=crawl_result["source_mode"],
-                        guidance=focus_hint,
+                        guidance=company_focus_hint,
                         raw_search_results=analysis_results,
                         map_ai_driver=light_ai,
                     )
@@ -1236,22 +1378,34 @@ if not st.session_state.report_ready:
                     deep_data_res = None
                     if final_news_list:
                         deduped_news = dedupe_news_items(final_news_list)
-                        finance_payload = finance_fallback_payload("Finance chain skipped")
-                        if st.session_state.enable_finance_chain:
-                            finance_payload = fetch_financial_data(topic, ai) or finance_fallback_payload("Finance chain failed")
-                        deep_data_res = {
-                            "topic": topic,
-                            "data": deduped_news,
-                            "finance": finance_payload,
-                            "source_mode": crawl_result["source_mode"],
-                            "crawler_valid_count": crawl_result["valid_count"],
-                            "warnings": list(crawl_result.get("warnings", [])),
-                            "extraction_stats": crawl_result.get("stats", {}),
-                            "freshness_stats": freshness_stats,
-                            "focus_tags": focus_tags,
-                        }
-                        if new_insight:
-                            mem_manager.add_topic_memory(topic, current_date_str, new_insight)
+                        if deduped_news:
+                            finance_data = {}
+                            if enable_finance_chain:
+                                try:
+                                    finance_data = fetch_financial_data(ai, topic) or finance_fallback_payload()
+                                except Exception as e:
+                                    print(f"⚠️ Finance chain failed for {topic}: {e}")
+                                    finance_data = finance_fallback_payload(f"Finance chain failed: {e}")
+
+                                if finance_data.get("is_public"):
+                                    news_summary_text = "\n".join([news.summary for news in deduped_news])
+                                    cats = get_finance_catalysts(ai, topic, news_summary_text)
+                                    if cats:
+                                        finance_data["catalysts"] = cats.model_dump()
+
+                            deep_data_res = {
+                                "topic": topic,
+                                "data": deduped_news,
+                                "finance": finance_data,
+                                "source_mode": crawl_result["source_mode"],
+                                "crawler_valid_count": crawl_result["valid_count"],
+                                "warnings": list(crawl_result.get("warnings", [])),
+                                "extraction_stats": crawl_result.get("stats", {}),
+                                "freshness_stats": freshness_stats,
+                                "focus_tags": focus_tags,
+                            }
+                            if new_insight:
+                                mem_manager.add_topic_memory(topic, current_date_str, new_insight)
 
                     timeline_data_res = {
                         "topic": topic,
@@ -1289,7 +1443,7 @@ if not st.session_state.report_ready:
             all_timeline_data = [item[2] for item in results if item[2] is not None]
             mem_manager.save_memory()
             search_runtime = build_run_metadata(
-                requested_provider=selected_search_provider,
+                requested_provider=search_provider,
                 resolved_provider=active_search_provider,
                 notices=search_notices,
                 diagnostics=get_search_diagnostics(),
@@ -1332,7 +1486,7 @@ if not st.session_state.report_ready:
             )
 
         industry_topics = get_industry_topics()
-        active_search_provider, search_notices = resolve_search_provider(selected_search_provider, tavily_key, exa_key)
+        active_search_provider, search_notices = resolve_search_provider(search_provider, tavily_key, exa_key)
 
         def run_industry_pipeline(industry_topic_list, domain_text, china_mode=False, query_suffix=""):
             ai, light_ai, ai_notices = build_ai_stack(
@@ -1340,9 +1494,9 @@ if not st.session_state.report_ready:
                 model_id,
                 use_gemini_light=use_gemini_light,
                 gemini_key=gemini_key,
-                gemini_model=resolve_gemini_model_name(selected_gemini_light_model, gemini_light_custom, DEFAULT_GEMINI_LIGHT_MODEL),
+                gemini_model=gemini_light_model,
                 use_gemini_main=use_gemini_main,
-                gemini_main_model=resolve_gemini_model_name(selected_gemini_main_model, gemini_main_custom, DEFAULT_GEMINI_MAIN_MODEL),
+                gemini_main_model=gemini_main_model,
             )
             if not ai.valid:
                 st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
@@ -1520,7 +1674,7 @@ if not st.session_state.report_ready:
                 all_timeline_data,
                 format_model_stack_name(ai, light_ai),
                 build_run_metadata(
-                    requested_provider=selected_search_provider,
+                    requested_provider=search_provider,
                     resolved_provider=active_search_provider,
                     notices=search_notices,
                     diagnostics=get_search_diagnostics(),
@@ -1606,3 +1760,12 @@ else:
     if st.button("📧 开启新一轮情报探索", use_container_width=True):
         reset_report_state()
         st.rerun()
+
+
+
+
+
+
+
+
+
