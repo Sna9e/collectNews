@@ -3,6 +3,7 @@ from typing import List
 import difflib
 import json
 import re
+from urllib.parse import urlparse
 
 
 FRONTIER_EVENT_TERMS = [
@@ -34,6 +35,14 @@ class EventBlueprintReport(BaseModel):
     events: List[EventDraft] = Field(default_factory=list, description="按时间先后排序的规范化事件列表")
 
 
+class TimelineTitleDraft(BaseModel):
+    event: str = Field(description="中文短讯标题，8到22字，突出动作和主体")
+
+
+class TimelineTitleReport(BaseModel):
+    events: List[TimelineTitleDraft] = Field(default_factory=list, description="按原顺序改写后的中文短讯标题")
+
+
 class TimelineEvent(BaseModel):
     event_id: str = Field(default="", description="对应统一事件ID")
     date: str = Field(description="新闻爆出的真实近期日期（格式：MM月DD日）。")
@@ -43,7 +52,7 @@ class TimelineEvent(BaseModel):
     history_status: str = Field(default="", description="历史事件状态，new 或 followup")
     first_seen: str = Field(default="", description="该事件首次进入事件图谱的日期")
     last_seen: str = Field(default="", description="该事件最近一次进入事件图谱的日期")
-    seen_count: int = Field(default=0, description="事件累计被追踪的次数")
+    seen_count: int = Field(default=0, description="事件累计被跟踪的次数")
 
 
 def _normalize_signature(date_text, source_text, event_text):
@@ -153,7 +162,6 @@ def _merge_event_dict(existing, candidate):
 _URL_IN_TEXT_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _PARENS_WITH_URL_RE = re.compile(r"\([^)]*https?://[^)]*\)", re.IGNORECASE)
 _SPACE_RE = re.compile(r"\s+")
-_ASCII_HEAVY_RE = re.compile(r"[A-Za-z]")
 
 EVENT_TRANSLATION_HINTS = {
     "tesla": "特斯拉",
@@ -224,12 +232,149 @@ def _topic_translation_hint(topic):
     return "、".join(dict.fromkeys(hints))
 
 
+def _looks_broken_event(text, topic=""):
+    cleaned = _strip_event_noise(text)
+    if not cleaned:
+        return True
+    if cleaned.endswith("(") or cleaned.endswith("（") or "()" in cleaned or "（)" in cleaned:
+        return True
+    if "..." in cleaned or "…" in cleaned:
+        return True
+    if _looks_generic_event(cleaned, topic):
+        return True
+    if len(cleaned) < 6:
+        return True
+    return False
+
+
+def _format_result_date(result, fallback="近期"):
+    raw = str(
+        result.get("published_at_resolved")
+        or result.get("published_date")
+        or result.get("published")
+        or ""
+    ).strip()
+    match = re.search(r"(\d{4})[-/](\d{2})[-/](\d{2})", raw)
+    if match:
+        return f"{match.group(2)}月{match.group(3)}日"
+    match = re.search(r"(\d{2})月(\d{2})日", raw)
+    if match:
+        return f"{match.group(1)}月{match.group(2)}日"
+    return str(fallback or "近期")
+
+
+def _format_result_source(result, fallback="未知来源"):
+    source = str(result.get("source") or "").strip()
+    if source:
+        return source
+    url = str(result.get("url") or "").strip()
+    if not url:
+        return str(fallback or "未知来源")
+    try:
+        host = urlparse(url).netloc.lower()
+    except Exception:
+        host = ""
+    host = host.replace("www.", "")
+    if not host:
+        return str(fallback or "未知来源")
+    return host.split(":")[0]
+
+
+def _clean_title_for_timeline(title, topic="", keywords=None):
+    cleaned = _strip_event_noise(title)
+    cleaned = re.sub(r"\s*[-|｜]\s*(Reuters|Bloomberg|MacRumors|Yahoo Finance|TipRanks|TechCrunch|The Verge|Android Police|CNBC)$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+\([^)]{0,30}\)$", "", cleaned).strip()
+    cleaned = _replace_known_aliases(cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -:：;；,，")
+    if not cleaned:
+        return _heuristic_localize_event(title, topic=topic, keywords=keywords)
+    if _CJK_RE.search(cleaned):
+        return cleaned[:26]
+    return cleaned[:42]
+
+
+def _rewrite_titles_with_ai(ai_driver, events, topic):
+    if not events or not ai_driver or not getattr(ai_driver, "valid", False):
+        return events
+
+    payload = []
+    for item in events[:12]:
+        payload.append(
+            {
+                "date": item.get("date", "近期"),
+                "source": item.get("source", "未知来源"),
+                "event": item.get("event", ""),
+                "keywords": item.get("keywords", []),
+            }
+        )
+
+    prompt = f"""
+    你是中文科技新闻编辑。下面是关于【{topic}】的核心时间线标题草稿：
+    {json.dumps(payload, ensure_ascii=False)}
+
+    请按相同顺序返回 JSON：{{"events":[{{"event":"..."}}]}}
+
+    严格要求：
+    1. 只改写 event，不要补充日期、来源、网址，不要调整顺序。
+    2. 每条必须是中文短讯标题，8到22字，最多24字。
+    3. 不要出现“近期动态”“最新消息”“相关进展”这种空泛标题。
+    4. 不要保留括号链接、URL、英文原文残片。
+    5. 若原始标题已是清晰中文，只做轻度压缩即可。
+    6. 专有词可保留，如 iPhone、FSD、Robotaxi、Optimus、Gemini、IPO。
+    """
+
+    report = ai_driver.analyze_structural(prompt, TimelineTitleReport)
+    if not report or not report.events:
+        return events
+
+    rewritten = []
+    for original, rewritten_item in zip(events, report.events):
+        current = dict(original)
+        candidate = _strip_event_noise(getattr(rewritten_item, "event", "") or "")
+        if _looks_broken_event(candidate, topic):
+            candidate = current.get("event", "") or ""
+        current["event"] = candidate[:26].strip() if candidate else current.get("event", "")
+        rewritten.append(current)
+
+    if len(rewritten) < len(events):
+        rewritten.extend(events[len(rewritten):])
+    return rewritten
+
+
+def _find_best_result_for_event(event_dict, raw_search_results):
+    best_result = None
+    best_score = 0.0
+    probe = {
+        "event": event_dict.get("event", ""),
+        "keywords": event_dict.get("keywords", []) or [],
+        "source_url": event_dict.get("source_url", ""),
+        "source": event_dict.get("source", ""),
+        "date": event_dict.get("date", ""),
+    }
+    for result in raw_search_results or []:
+        candidate = {
+            "event": result.get("title", "") or "",
+            "keywords": [],
+            "source_url": result.get("url", "") or "",
+            "source": result.get("source", "") or "",
+            "date": _format_result_date(result, ""),
+        }
+        score = _event_match_score(probe, candidate)
+        if score > best_score:
+            best_result = result
+            best_score = score
+    return best_result, best_score
+
+
 def _heuristic_localize_event(event_text, topic="", keywords=None):
     cleaned = _strip_event_noise(event_text)
     if not cleaned:
-        return "近期动态更新"
+        topic_hint = _topic_translation_hint(topic)
+        if topic_hint:
+            return f"{topic_hint}最新进展"
+        return "核心进展更新"
     if _CJK_RE.search(cleaned):
-        return cleaned[:32]
+        return cleaned[:28]
 
     translated = _replace_known_aliases(cleaned)
     translated = re.sub(r"\s+", " ", translated).strip()
@@ -256,87 +401,43 @@ def _heuristic_localize_event(event_text, topic="", keywords=None):
     return cleaned[:28]
 
 
-def _rewrite_event_dicts(ai_driver, events, topic):
+def _rewrite_event_dicts(ai_driver, events, topic, raw_search_results=None):
     if not events:
         return events
 
-    sanitized_seed = []
+    rewritten = []
     for event_dict in events:
         current = dict(event_dict)
         current["event"] = _strip_event_noise(current.get("event", ""))
-        sanitized_seed.append(current)
+        matched_result, match_score = _find_best_result_for_event(current, raw_search_results or [])
+        if matched_result and match_score >= 0.28:
+            result_title = _clean_title_for_timeline(
+                matched_result.get("title", "") or current.get("event", ""),
+                topic=topic,
+                keywords=current.get("keywords", []),
+            )
+            current["date"] = _format_result_date(matched_result, current.get("date", "近期"))
+            current["source"] = _format_result_source(matched_result, current.get("source", "未知来源"))
+            current["source_url"] = matched_result.get("url") or current.get("source_url", "")
+            if _looks_broken_event(current.get("event", ""), topic):
+                current["event"] = result_title
+            elif result_title and len(result_title) <= len(current.get("event", "") or result_title) + 8:
+                current["event"] = result_title
+        elif _looks_broken_event(current.get("event", ""), topic):
+            current["event"] = _heuristic_localize_event(
+                current.get("event", ""),
+                topic=topic,
+                keywords=current.get("keywords", []),
+            )
 
-    if not ai_driver or not getattr(ai_driver, "valid", False):
-        return [
-            {
-                **event_dict,
-                "event": _heuristic_localize_event(
-                    event_dict.get("event", ""),
-                    topic=topic,
-                    keywords=event_dict.get("keywords", []),
-                ),
-            }
-            for event_dict in sanitized_seed
-        ]
+        current["event"] = _strip_event_noise(current.get("event", ""))
+        if not current["event"]:
+            current["event"] = _heuristic_localize_event("", topic=topic, keywords=current.get("keywords", []))
+        current["date"] = str(current.get("date", "") or "近期")
+        current["source"] = str(current.get("source", "") or "未知来源")
+        rewritten.append(current)
 
-    payload = [
-        {
-            "date": item.get("date", "近期"),
-            "source": item.get("source", "未知来源"),
-            "event": item.get("event", ""),
-            "source_url": item.get("source_url", ""),
-            "keywords": item.get("keywords", []),
-        }
-        for item in sanitized_seed[:12]
-    ]
-    payload_json = json.dumps(payload, ensure_ascii=False)
-    prompt = f"""
-    你是中文科技情报编辑。下面是关于【{topic}】的核心事件草稿 JSON：
-    {payload_json}
-
-    请按相同顺序返回 events 数组，并严格遵守：
-    1. 只做事件短讯规范化，不要改乱 date、source、source_url、keywords 的对应关系。
-    2. event 必须改写为中文短讯风格，优先 8 到 18 个字，最长不超过 24 个字。
-    3. event 不得包含 URL、英文原标题、括号中的链接、冗长来源后缀。
-    4. 若原文是英文，请翻译成中文表达；必要专有词可保留，如 FSD、Robotaxi、Optimus、iPhone、Gemini、IPO。
-    5. 不要输出“近期”“最新消息”这种空泛表述，要体现事件动作。
-    6. 如果某条已经是清晰中文，可只做轻微压缩。
-    """
-
-    report = ai_driver.analyze_structural(prompt, EventBlueprintReport)
-    if not report or not report.events:
-        return [
-            {
-                **event_dict,
-                "event": _heuristic_localize_event(
-                    event_dict.get("event", ""),
-                    topic=topic,
-                    keywords=event_dict.get("keywords", []),
-                ),
-            }
-            for event_dict in sanitized_seed
-        ]
-
-    rewritten = []
-    for source_dict, rewritten_event in zip(sanitized_seed, report.events):
-        rewritten_dict = rewritten_event.model_dump() if hasattr(rewritten_event, "model_dump") else dict(rewritten_event)
-        source_dict["date"] = rewritten_dict.get("date") or source_dict.get("date", "近期")
-        source_dict["source"] = rewritten_dict.get("source") or source_dict.get("source", "未知来源")
-        source_dict["source_url"] = rewritten_dict.get("source_url") or source_dict.get("source_url", "")
-        source_dict["keywords"] = rewritten_dict.get("keywords") or source_dict.get("keywords", [])
-        rewritten_text = rewritten_dict.get("event", "") or source_dict.get("event", "")
-        if _looks_generic_event(rewritten_text, topic):
-            rewritten_text = source_dict.get("event", "")
-        source_dict["event"] = _heuristic_localize_event(
-            rewritten_text,
-            topic=topic,
-            keywords=source_dict.get("keywords", []),
-        )
-        rewritten.append(source_dict)
-
-    if len(rewritten) < len(sanitized_seed):
-        rewritten.extend(sanitized_seed[len(rewritten):])
-    return rewritten
+    return _rewrite_titles_with_ai(ai_driver, rewritten, topic)
 
 
 def _dedupe_finalized_events(events, max_items=12):
@@ -393,7 +494,7 @@ def _limit_overrepresented_categories(events, target_min=5, hard_limit=12):
     return selected[:hard_limit]
 
 
-def _finalize_event_blueprints(events, ai_driver=None, topic=""):
+def _finalize_event_blueprints(events, ai_driver=None, topic="", raw_search_results=None):
     deduped_events = []
     for event in events or []:
         event_dict = event.model_dump() if hasattr(event, "model_dump") else dict(event)
@@ -425,7 +526,7 @@ def _finalize_event_blueprints(events, ai_driver=None, topic=""):
         deduped_events.append(event_dict)
 
     diversified_events = _limit_overrepresented_categories(deduped_events, target_min=5, hard_limit=12)
-    diversified_events = _rewrite_event_dicts(ai_driver, diversified_events, topic)
+    diversified_events = _rewrite_event_dicts(ai_driver, diversified_events, topic, raw_search_results=raw_search_results)
     diversified_events = _dedupe_finalized_events(diversified_events, max_items=12)
 
     finalized = []
@@ -439,19 +540,17 @@ def _finalize_event_blueprints(events, ai_driver=None, topic=""):
 def _fallback_event_blueprints(raw_search_results, ai_driver=None, topic=""):
     events = []
     for result in raw_search_results[:10]:
-        title = (result.get("title") or "未命名事件").strip()
-        if len(title) > 30:
-            title = title[:30]
+        title = _clean_title_for_timeline(result.get("title") or "未命名事件", topic=topic)
         events.append(
             EventDraft(
-                date="近期",
-                source=result.get("url", "") or "未知来源",
+                date=_format_result_date(result, "近期"),
+                source=_format_result_source(result, "未知来源"),
                 event=title,
-                source_url=result.get("url", ""),
+                source_url=result.get("url", "") or "",
                 keywords=[],
             )
         )
-    return _finalize_event_blueprints(events, ai_driver=ai_driver, topic=topic)
+    return _finalize_event_blueprints(events, ai_driver=ai_driver, topic=topic, raw_search_results=raw_search_results)
 
 
 def build_event_blueprints(ai_driver, raw_search_results, topic, current_date, time_opt, history_hint="", guidance=""):
@@ -480,7 +579,7 @@ def build_event_blueprints(ai_driver, raw_search_results, topic, current_date, t
 
     任务与规则：
     1. 先做事件规范化，优先保留 5 到 8 条真正最值得后续展开的核心事件主档；如果当天事件确实密集，可放宽到 10 条，最多不超过 12 条，按事件爆出时间从过去到现在排序。
-    2. 【{topic}】必须是绝对主角；混入竞品、泛科技晨报、无关公司的一律删除。
+    2. 【{topic}】必须是绝对主角；混入竞品、泛科技晨报、无关公司的，一律删除。
     3. 遇到多篇报道说的是同一件事，必须合并成一条规范化事件，不要重复。
     4. date 填新闻爆出的真实近期时间，不要把未来预测日期当成事件日期。
     5. event 保持一句话短讯风格，15字以内；keywords 提炼 3 到 6 个关键词；source_url 必须尽量填写对应原始 URL。
@@ -491,7 +590,7 @@ def build_event_blueprints(ai_driver, raw_search_results, topic, current_date, t
     report = ai_driver.analyze_structural(prompt, EventBlueprintReport)
     if not report or not report.events:
         return _fallback_event_blueprints(raw_search_results, ai_driver=ai_driver, topic=topic)
-    return _finalize_event_blueprints(report.events, ai_driver=ai_driver, topic=topic)
+    return _finalize_event_blueprints(report.events, ai_driver=ai_driver, topic=topic, raw_search_results=raw_search_results)
 
 
 def generate_timeline(event_blueprints):
