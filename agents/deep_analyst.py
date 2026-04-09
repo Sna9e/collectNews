@@ -1,4 +1,4 @@
-﻿import json
+import json
 import concurrent.futures
 import re
 from pydantic import BaseModel, Field
@@ -19,7 +19,10 @@ class NewsItem(BaseModel):
     title: str = Field(default="未命名情报", description="新闻标题（务必翻译为中文）")
     source: str = Field(default="未知网络", description="来源媒体")
     date_check: str = Field(default="近期", description="真实日期 YYYY-MM-DD 或 MM月DD日")
-    summary: str = Field(default="暂无详情", description="深度商业分析。必须严格分段并包含：【事件核心】、【深度细节/数据支撑】、【行业深远影响】。")
+    summary: str = Field(
+        default="暂无详情",
+        description="深度商业分析。必须严格分段并包含：【事件核心】、【深度细节/数据支撑】、【行业深远影响】，总中文篇幅不少于300字。",
+    )
     url: str = Field(default="", description="该新闻的原文链接 URL（必须从原始数据中提取）")
     importance: int = Field(default=3, description="重要性 1-5")
     chart_info: ChartData = Field(default_factory=ChartData, description="自动化图表数据提取")
@@ -112,6 +115,10 @@ def _sanitize_generated_summary(summary_text):
     if not sanitized:
         return "暂无详情"
     return sanitized
+
+
+def _count_cjk_chars(text):
+    return len(_CJK_RE.findall(str(text or "")))
 
 
 def _sanitize_news_item(news_item):
@@ -265,21 +272,80 @@ def _build_fallback_summary(topic, blueprint, supporting_results):
     secondary = dict(supporting_results[1]) if len(supporting_results) > 1 else {}
     secondary_title = secondary.get("title", "")
     secondary_snippet = secondary.get("content", "")
+    tertiary = dict(supporting_results[2]) if len(supporting_results) > 2 else {}
+    tertiary_title = tertiary.get("title", "")
+    tertiary_snippet = tertiary.get("content", "")
     source = primary.get("source") or blueprint.get("source", "综合报道")
     keywords = "、".join((blueprint.get("keywords", []) or [])[:4])
     influence_hint = keywords or title
 
-    parts = [f"【事件核心】\n{source} 等来源显示，{title}。"]
+    parts = [
+        f"【事件核心】\n{source} 等来源显示，{title}。结合当前可见材料，这条新闻的主轴集中在"
+        f"“{blueprint.get('event', '') or title}”所对应的业务推进、产品变化或资本市场信号上。"
+    ]
     if snippet:
-        parts.append(f"【深度细节/数据支撑】\n{_trim_text(snippet, 320)}")
+        detail_lines = [_trim_text(snippet, 520)]
+        if secondary_title or secondary_snippet:
+            detail_lines.append(f"补充来源还显示：{_trim_text(secondary_snippet or secondary_title, 320)}")
+        if tertiary_title or tertiary_snippet:
+            detail_lines.append(f"第三方报道补充称：{_trim_text(tertiary_snippet or tertiary_title, 260)}")
+        parts.append(f"【深度细节/数据支撑】\n{' '.join([line for line in detail_lines if line])}")
     elif blueprint.get("event"):
-        parts.append(f"【深度细节/数据支撑】\n当前抓取结果围绕“{blueprint.get('event', '')}”展开，相关关键词包括：{keywords or '暂无更多细节'}。")
-    if secondary_title or secondary_snippet:
-        parts.append(f"补充来源还提到：{_trim_text(secondary_title or secondary_snippet, 220)}")
+        fallback_detail = (
+            f"当前抓取结果围绕“{blueprint.get('event', '')}”展开，相关关键词包括：{keywords or '暂无更多细节'}。"
+            "现有材料虽然不一定全部是原文级全文，但已经显示出该事件在产品、业务、市场反馈或产业链层面具备持续跟踪价值。"
+        )
+        if secondary_title or secondary_snippet:
+            fallback_detail += f" 补充来源还提到：{_trim_text(secondary_snippet or secondary_title, 260)}"
+        parts.append(f"【深度细节/数据支撑】\n{fallback_detail}")
     parts.append(
-        f"【行业深远影响】\n这条动态说明【{topic}】在“{influence_hint}”方向仍有新的产品、监管、商业化或生态进展，值得继续跟踪后续细节。"
+        f"【行业深远影响】\n这条动态说明【{topic}】在“{influence_hint}”方向仍有新的产品、监管、商业化或生态进展。"
+        "如果后续还有更多数据披露、管理层表态、供应链反馈或竞品应对，这件事很可能继续影响市场预期与行业比较框架，"
+        "因此值得持续跟踪其后续细节、节奏变化以及外部反应。"
     )
     return "\n".join([part for part in parts if part])
+
+
+def _collect_supporting_results(blueprint, raw_search_results, limit=3):
+    scored_results = []
+    for result in raw_search_results or []:
+        score = _supporting_result_score(blueprint, result)
+        if score >= 0.24:
+            scored_results.append((score, result))
+    scored_results.sort(
+        key=lambda item: (item[0], item[1].get("published_at_resolved") or item[1].get("published_date") or ""),
+        reverse=True,
+    )
+    return [item[1] for item in scored_results[:limit]]
+
+
+def _expand_short_summary(summary_text, topic, blueprint, supporting_results):
+    summary = _sanitize_generated_summary(summary_text)
+    if _count_cjk_chars(summary) >= 300:
+        return summary
+
+    extra_lines = []
+    normalized_summary = _normalize_text(summary)
+    for result in supporting_results[:3]:
+        candidate = _trim_text(result.get("content") or result.get("title") or "", 260)
+        if not candidate:
+            continue
+        normalized_candidate = _normalize_text(candidate)
+        if normalized_candidate and normalized_candidate[:80] in normalized_summary:
+            continue
+        extra_lines.append(candidate)
+
+    if extra_lines:
+        summary += "\n补充来源显示：" + "；".join(extra_lines[:2]).rstrip("；;。") + "。"
+
+    if _count_cjk_chars(summary) < 300:
+        focus_hint = "、".join((blueprint.get("keywords", []) or [])[:4]) or blueprint.get("event", "") or topic
+        summary += (
+            f"\n补充判断：围绕“{focus_hint}”的后续信息仍在持续增加，"
+            "后续更值得关注管理层表态、业务执行节奏、市场反馈以及产业链侧是否出现进一步印证。"
+        )
+
+    return _sanitize_generated_summary(summary)
 
 
 def _supplement_news_from_blueprints(news_items, event_blueprints, raw_search_results, topic, min_count=4, max_count=5):
@@ -301,16 +367,7 @@ def _supplement_news_from_blueprints(news_items, event_blueprints, raw_search_re
         if event_title and _normalize_text(event_title) in covered_titles:
             continue
 
-        scored_results = []
-        for result in raw_search_results or []:
-            score = _supporting_result_score(blueprint, result)
-            if score >= 0.24:
-                scored_results.append((score, result))
-        scored_results.sort(
-            key=lambda item: (item[0], item[1].get("published_at_resolved") or item[1].get("published_date") or ""),
-            reverse=True,
-        )
-        supporting_results = [item[1] for item in scored_results[:2]]
+        supporting_results = _collect_supporting_results(blueprint, raw_search_results, limit=3)
         if not supporting_results and not event_title:
             continue
 
@@ -351,6 +408,16 @@ def _finalize_news_output(final_report, event_blueprints, valid_event_ids, raw_s
         min_count=4,
         max_count=5,
     )
+    blueprint_map = {item.get("event_id", ""): item for item in _serialize_event_blueprints(event_blueprints)}
+    for news_item in final_news:
+        blueprint = blueprint_map.get(getattr(news_item, "event_id", "") or "", {})
+        supporting_results = _collect_supporting_results(blueprint, raw_search_results, limit=3) if blueprint else []
+        news_item.summary = _expand_short_summary(
+            getattr(news_item, "summary", "") or "",
+            topic,
+            blueprint,
+            supporting_results,
+        )
     return final_news, final_report.overall_insight
 
 
@@ -408,21 +475,28 @@ def map_reduce_analysis(
 
     if source_mode == "search_summary_fallback":
         detail_prompt = (
-            "要求每条新闻约 220 到 350 字。只能基于现有搜索摘要做事实概括和行业判断，"
-            "不得伪造原文直接引语、微观动作或超细颗粒数据。"
+            "要求每条新闻总中文篇幅不少于 300 字，建议控制在 320 到 450 字。"
+            "【事件核心】至少 70 字，【深度细节/数据支撑】至少 150 字，【行业深远影响】至少 80 字。"
+            "只能基于现有搜索摘要做事实概括和行业判断，不得伪造原文直接引语、微观动作或超细颗粒数据。"
         )
     elif source_mode == "mixed_fallback":
         detail_prompt = (
-            "要求每条新闻约 320 到 520 字。可以结合全文和网页抽取做分析，"
-            "但对直接引语、超细颗粒数字和过度确定的因果判断要保守表达。"
+            "要求每条新闻总中文篇幅不少于 320 字，建议控制在 360 到 560 字。"
+            "【事件核心】至少 80 字，【深度细节/数据支撑】至少 160 字，【行业深远影响】至少 90 字。"
+            "可以结合全文和网页抽取做分析，但对直接引语、超细颗粒数字和过度确定的因果判断要保守表达。"
         )
     elif "24" in time_opt:
         detail_prompt = (
-            "要求每条新闻约 260 到 380 字。优先保留能支撑判断的具体数字、核心动作、"
-            "原话要点和业务影响；宁可略短一些，也不要为了篇幅牺牲条数。"
+            "要求每条新闻总中文篇幅不少于 320 字，建议控制在 360 到 520 字。"
+            "【事件核心】至少 80 字，【深度细节/数据支撑】至少 160 字，【行业深远影响】至少 90 字。"
+            "优先保留能支撑判断的具体数字、核心动作、原话要点和业务影响；不要为了控制篇幅而把摘要压成过短版本。"
         )
     else:
-        detail_prompt = "要求每条新闻约 280 到 320 字。侧重于宏观趋势、战略意图的分析。"
+        detail_prompt = (
+            "要求每条新闻总中文篇幅不少于 320 字，建议控制在 360 到 500 字。"
+            "【事件核心】至少 80 字，【深度细节/数据支撑】至少 160 字，【行业深远影响】至少 90 字。"
+            "侧重于宏观趋势、战略意图和行业影响的完整分析。"
+        )
 
     event_reduce_text = ""
     if has_event_blueprints:
@@ -457,8 +531,9 @@ def map_reduce_analysis(
         2. 终极剔除旧闻与无关陪衬事件，遇到同一事件必须合并。
         3. {detail_prompt}
         3.1 严禁把网页导航、分享按钮、相关推荐、时间标签、评分、订阅提示、栏目列表当作正文细节写入摘要。
+        3.2 任何一条 news.summary 如果中文正文不足 300 字，视为不合格，需要继续补足细节和影响分析。
         4. 如果今天的新情报与历史记忆存在延续、推进或反转，请在【事件核心】中明确写出“前情回顾”。
-        5. 如果新闻中出现明显的数据对比，请尽量准确提取到 chart_info 中。
+        5. 如果新闻中出现明显的数据对比，请尽量准确提取到 chart_info 中，但不要为了图表牺牲 summary 的完整叙述。
         6. 优先填写统一事件主档中的 event_id；如无法可靠映射但事件确实重要，可将 event_id 留空。
         7. 优先保留 3 到 5 条彼此不同的重要事件，不要为了稳妥把 3 到 5 条压成 1 到 2 条。
         8. 除专有名词外，尽量用中文表述，不要直接把英文标题、侧栏栏目名或站点 slogan 粘进【深度细节/数据支撑】。
@@ -511,8 +586,9 @@ def map_reduce_analysis(
         3. 深度扩写排版：
         {detail_prompt}
         4. 严禁把网页导航、分享按钮、相关推荐、时间标签、评分、订阅提示、栏目列表、站点 slogan 当作正文细节写入摘要。
+        4.1 任何一条 news.summary 如果中文正文不足 300 字，视为不合格，需要继续补足事实、细节和影响分析。
         5. 如果今天的新情报与【你的历史记忆库】存在延续性、推进或重大反转，请务必在【事件核心】中以“前情回顾”的口吻明确指出并进行对比。
-        6. 如果新闻中出现了明显的数据对比（如金额、份额、增速等），请务必准确提取到 chart_info 中。
+        6. 如果新闻中出现了明显的数据对比（如金额、份额、增速等），请务必准确提取到 chart_info 中，但不得为了图表而压缩正文篇幅。
         7. 提炼 overall_insight（200字以内），记录今天的核心结论。
         8. 优先保留 3 到 5 条真正重要的新闻；只有当今天确实不足 3 条时，才允许少于 3 条。
         9. 不要因为“映射不够完美”而过度删减，只要事件真实、近期、重要、且【{topic}】是主角，就应尽量保留。
