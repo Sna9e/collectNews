@@ -34,6 +34,7 @@ from tools.report_linker import annotate_report_data
 from tools.search_engine import (
     audit_recent_news_results,
     filter_china_results,
+    filter_results_for_source_quality,
     get_search_diagnostics,
     merge_sites_text,
     reset_search_diagnostics,
@@ -119,7 +120,16 @@ GEMINI_MODEL_OPTIONS = [
     GEMINI_3_FLASH_PREVIEW_MODEL,
     "__custom__",
 ]
-DEFAULT_SEARCH_PROVIDER = "exa"
+DEFAULT_SEARCH_PROVIDER = "tavily"
+DEFAULT_TAVILY_SEARCH_DEPTH = "advanced"
+DEFAULT_TAVILY_TOPIC = "news"
+DEFAULT_TAVILY_RESULT_LIMIT = 10
+DEFAULT_TAVILY_CHUNKS_PER_SOURCE = 3
+DEFAULT_TAVILY_AUTO_PARAMETERS = False
+DEFAULT_TAVILY_INCLUDE_RAW_CONTENT = "off"
+DEFAULT_TAVILY_INCLUDE_ANSWER = False
+DEFAULT_TAVILY_INCLUDE_TEXT = ""
+DEFAULT_TAVILY_EXCLUDE_TEXT = ""
 DEFAULT_EXA_SEARCH_TYPE = "auto"
 DEFAULT_EXA_CATEGORY = "news"
 DEFAULT_EXA_RESULT_LIMIT = 10
@@ -130,9 +140,21 @@ DEFAULT_EXA_INCLUDE_TEXT = ""
 DEFAULT_EXA_EXCLUDE_TEXT = ""
 HARDTECH_EXA_INCLUDE_TEXT = "chip datacenter optics robotics satellite"
 HARDTECH_EXA_EXCLUDE_TEXT = "lawsuit court attorney privacy antitrust"
+HARDTECH_TAVILY_INCLUDE_TEXT = "chip datacenter optics robotics satellite"
+HARDTECH_TAVILY_EXCLUDE_TEXT = "lawsuit court attorney privacy antitrust"
+REQUIRED_FOCUS_TAGS = ["供应链", "硬件"]
 
 SEARCH_UI_DEFAULTS = {
     "search_provider": DEFAULT_SEARCH_PROVIDER,
+    "tavily_search_depth": DEFAULT_TAVILY_SEARCH_DEPTH,
+    "tavily_topic": DEFAULT_TAVILY_TOPIC,
+    "tavily_result_limit": DEFAULT_TAVILY_RESULT_LIMIT,
+    "tavily_chunks_per_source": DEFAULT_TAVILY_CHUNKS_PER_SOURCE,
+    "tavily_auto_parameters": DEFAULT_TAVILY_AUTO_PARAMETERS,
+    "tavily_include_raw_content": DEFAULT_TAVILY_INCLUDE_RAW_CONTENT,
+    "tavily_include_answer": DEFAULT_TAVILY_INCLUDE_ANSWER,
+    "tavily_include_text": DEFAULT_TAVILY_INCLUDE_TEXT,
+    "tavily_exclude_text": DEFAULT_TAVILY_EXCLUDE_TEXT,
     "exa_search_type": DEFAULT_EXA_SEARCH_TYPE,
     "exa_category": DEFAULT_EXA_CATEGORY,
     "exa_result_limit": DEFAULT_EXA_RESULT_LIMIT,
@@ -141,6 +163,7 @@ SEARCH_UI_DEFAULTS = {
     "exa_text_chars": DEFAULT_EXA_TEXT_CHARS,
     "exa_include_text": DEFAULT_EXA_INCLUDE_TEXT,
     "exa_exclude_text": DEFAULT_EXA_EXCLUDE_TEXT,
+    "industry_strict_unknown_sources": False,
     "use_gemini_main": False,
     "gemini_main_model": DEFAULT_GEMINI_MAIN_MODEL,
     "gemini_main_model_custom": "",
@@ -318,11 +341,11 @@ def format_search_provider_label(provider):
 
 def format_search_provider_option(provider):
     labels = {
-        "exa": "Exa（推荐默认）",
+        "tavily": "Tavily（推荐默认）",
+        "exa": "Exa",
         "hybrid": "混合（Exa + Tavily）",
-        "tavily": "Tavily",
     }
-    return labels.get(normalize_search_provider(provider), "Exa（推荐默认）")
+    return labels.get(normalize_search_provider(provider), "Tavily（推荐默认）")
 
 
 def format_gemini_model_option(model_name):
@@ -345,8 +368,27 @@ def resolve_gemini_model_name(selected_model, custom_model, fallback_model):
 
 
 
+def apply_tavily_default_preset():
+    st.session_state.search_provider = "tavily"
+    st.session_state.tavily_search_depth = DEFAULT_TAVILY_SEARCH_DEPTH
+    st.session_state.tavily_topic = DEFAULT_TAVILY_TOPIC
+    st.session_state.tavily_result_limit = DEFAULT_TAVILY_RESULT_LIMIT
+    st.session_state.tavily_chunks_per_source = DEFAULT_TAVILY_CHUNKS_PER_SOURCE
+    st.session_state.tavily_auto_parameters = DEFAULT_TAVILY_AUTO_PARAMETERS
+    st.session_state.tavily_include_raw_content = DEFAULT_TAVILY_INCLUDE_RAW_CONTENT
+    st.session_state.tavily_include_answer = DEFAULT_TAVILY_INCLUDE_ANSWER
+    st.session_state.tavily_include_text = DEFAULT_TAVILY_INCLUDE_TEXT
+    st.session_state.tavily_exclude_text = DEFAULT_TAVILY_EXCLUDE_TEXT
+
+
+def apply_tavily_hardtech_preset():
+    apply_tavily_default_preset()
+    st.session_state.tavily_include_text = HARDTECH_TAVILY_INCLUDE_TEXT
+    st.session_state.tavily_exclude_text = HARDTECH_TAVILY_EXCLUDE_TEXT
+
+
 def apply_exa_default_preset():
-    st.session_state.search_provider = DEFAULT_SEARCH_PROVIDER
+    st.session_state.search_provider = "exa"
     st.session_state.exa_search_type = DEFAULT_EXA_SEARCH_TYPE
     st.session_state.exa_category = DEFAULT_EXA_CATEGORY
     st.session_state.exa_result_limit = DEFAULT_EXA_RESULT_LIMIT
@@ -375,6 +417,40 @@ def apply_gemini_31_flash_lite_main_preset():
     st.session_state.use_gemini_main = True
     st.session_state.gemini_main_model = "__custom__"
     st.session_state.gemini_main_model_custom = GEMINI_31_FLASH_LITE_PRESET
+
+
+def normalize_focus_tags(tags):
+    merged = []
+    seen = set()
+    for value in list(tags or []) + REQUIRED_FOCUS_TAGS:
+        item = str(value or "").strip()
+        if not item or item in seen:
+            continue
+        merged.append(item)
+        seen.add(item)
+    return merged
+
+
+_INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\\\|?*]+')
+
+
+def sanitize_export_name(filename):
+    value = str(filename or "").strip()
+    value = _INVALID_FILENAME_CHARS_RE.sub("_", value)
+    value = re.sub(r"\s+", " ", value).strip(" .")
+    if not value:
+        value = f"FPC-RD科技资讯_{datetime.date.today()}"
+    return value
+
+
+def normalize_report_sections(sections):
+    normalized = []
+    for section in sections or []:
+        item = dict(section or {})
+        item["focus_tags"] = normalize_focus_tags(item.get("focus_tags", []))
+        item["warnings"] = list(item.get("warnings", []) or [])
+        normalized.append(item)
+    return normalized
 
 
 
@@ -764,6 +840,7 @@ def collect_company_search_results(
     tavily_key,
     company_pack=None,
     search_provider=DEFAULT_SEARCH_PROVIDER,
+    tavily_settings=None,
     exa_key="",
     exa_settings=None,
 ):
@@ -777,6 +854,10 @@ def collect_company_search_results(
         merge_sites_text(normalized_sites_text, company_pack.get("domains", []))
         if use_custom_domain_filter else ""
     )
+    trusted_source_domains = merge_sites_text(
+        normalized_sites_text or default_sites_text,
+        company_pack.get("domains", []),
+    )
     per_query_limit = 18 if company_pack.get("id") != "generic" else 16
     for query in build_company_queries_from_pack(topic, company_pack):
         batch = search_web(
@@ -786,9 +867,17 @@ def collect_company_search_results(
             max_results=per_query_limit,
             tavily_key=tavily_key,
             provider=search_provider,
+            tavily_settings=tavily_settings,
             exa_key=exa_key,
             exa_settings=exa_settings,
         )
+        batch, quality_stats, quality_warnings = filter_results_for_source_quality(
+            batch,
+            trusted_domains=trusted_source_domains,
+            strict_unknown=True,
+        )
+        if quality_warnings:
+            print(f"ℹ️ Source quality filter for {topic}: {quality_stats} | {'；'.join(quality_warnings)}")
         for item in batch or []:
             url = item.get("url")
             if url and url in seen_urls:
@@ -831,7 +920,7 @@ def collect_source_material(raw_results, max_urls, jina_key, max_chars_per_sourc
 def build_empty_section_payload(topic, warnings=None, freshness_stats=None, focus_tags=None):
     warnings = list(warnings or [])
     freshness_stats = freshness_stats or {}
-    focus_tags = list(focus_tags or [])
+    focus_tags = normalize_focus_tags(focus_tags or [])
     empty_deep = {
         "topic": topic,
         "data": [],
@@ -867,6 +956,9 @@ def build_error_section_payload(topic, error_text, freshness_stats=None, focus_t
 
 def store_report_outputs(all_deep_data, all_timeline_data, export_name, model_name, run_metadata=None):
     linked_deep_data, linked_timeline_data = annotate_report_data(all_deep_data, all_timeline_data)
+    linked_deep_data = normalize_report_sections(linked_deep_data)
+    linked_timeline_data = normalize_report_sections(linked_timeline_data)
+    export_name = sanitize_export_name(export_name)
     st.session_state.report_data = linked_deep_data
     st.session_state.timeline_data = linked_timeline_data
     st.session_state.run_metadata = dict(run_metadata or {})
@@ -1196,7 +1288,7 @@ with st.sidebar:
     time_opt = st.selectbox("回溯时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
     search_provider = st.selectbox(
         "搜索引擎",
-        ["exa", "hybrid", "tavily"],
+        ["tavily", "hybrid", "exa"],
         key="search_provider",
         format_func=format_search_provider_option,
     )
@@ -1205,15 +1297,98 @@ with st.sidebar:
 
     with st.expander("⚙️ 高级搜索源设置"):
         sites = st.text_area("重点搜索源", get_default_sites_text(), height=250)
+        industry_strict_unknown_sources = st.toggle(
+            "行业流严格可信源过滤（仅保留可信媒体域名）",
+            key="industry_strict_unknown_sources",
+            help="开启后，行业流会过滤未知来源；更稳，但可能漏掉冷门站点的一手新闻。",
+        )
         preset_col1, preset_col2 = st.columns(2)
         with preset_col1:
+            if st.button("恢复 Tavily 默认", key="btn_tavily_default"):
+                apply_tavily_default_preset()
+        with preset_col2:
+            if st.button("Tavily 硬科技预设", key="btn_tavily_hardtech"):
+                apply_tavily_hardtech_preset()
+
+        st.caption("默认已经改为 Tavily：`advanced + news + 3 chunks`。这套配置优先保证新闻相关性、结果稳定性和后续抓取兼容性。")
+        tavily_search_depth = st.selectbox(
+            "Tavily 搜索深度",
+            ["advanced", "basic"],
+            key="tavily_search_depth",
+            format_func=lambda item: {
+                "advanced": "advanced（推荐，相关性更强）",
+                "basic": "basic（更省额度）",
+            }.get(item, item),
+        )
+        tavily_topic = st.selectbox(
+            "Tavily 结果主题",
+            ["news", "finance", "general"],
+            key="tavily_topic",
+            format_func=lambda item: {
+                "news": "news（推荐）",
+                "finance": "finance（偏金融）",
+                "general": "general（更广）",
+            }.get(item, item),
+        )
+        tavily_result_limit = st.number_input(
+            "Tavily 每次查询结果数",
+            min_value=3,
+            max_value=20,
+            step=1,
+            key="tavily_result_limit",
+        )
+        tavily_chunks_per_source = st.slider(
+            "Tavily 每源片段数",
+            min_value=1,
+            max_value=3,
+            step=1,
+            key="tavily_chunks_per_source",
+            disabled=st.session_state.tavily_search_depth != "advanced",
+        )
+        tavily_auto_parameters = st.toggle(
+            "Tavily 自动参数调优（beta）",
+            key="tavily_auto_parameters",
+            help="开启后 Tavily 会按查询意图自动调参；若你更重视可控和稳定，建议关闭。",
+        )
+        tavily_include_raw_content = st.selectbox(
+            "Tavily 原文片段模式",
+            ["off", "markdown", "text"],
+            key="tavily_include_raw_content",
+            format_func=lambda item: {
+                "off": "关闭（推荐，交给后续正文抓取）",
+                "markdown": "markdown（更全）",
+                "text": "text（最重）",
+            }.get(item, item),
+        )
+        tavily_include_answer = st.toggle(
+            "Tavily 返回摘要答案",
+            key="tavily_include_answer",
+            help="通常不建议默认开启，返回体更大；当前主链仍以结果列表和后续正文抓取为主。",
+        )
+        tavily_include_text = st.text_input("Tavily 必含关键词（可选，1-5词）", key="tavily_include_text")
+        tavily_exclude_text = st.text_input("Tavily 排除关键词（可选，1-5词）", key="tavily_exclude_text")
+        tavily_search_settings = {
+            "search_depth": tavily_search_depth,
+            "topic": tavily_topic,
+            "num_results": int(tavily_result_limit),
+            "chunks_per_source": int(tavily_chunks_per_source),
+            "auto_parameters": bool(tavily_auto_parameters),
+            "include_raw_content": tavily_include_raw_content,
+            "include_answer": bool(tavily_include_answer),
+            "include_text": tavily_include_text,
+            "exclude_text": tavily_exclude_text,
+        }
+
+        st.divider()
+        exa_preset_col1, exa_preset_col2 = st.columns(2)
+        with exa_preset_col1:
             if st.button("恢复 Exa 默认", key="btn_exa_default"):
                 apply_exa_default_preset()
-        with preset_col2:
-            if st.button("硬科技优先预设", key="btn_exa_hardtech"):
+        with exa_preset_col2:
+            if st.button("Exa 硬科技预设", key="btn_exa_hardtech"):
                 apply_exa_hardtech_preset()
 
-        st.caption("默认已经改为 Exa：`auto + news + highlights`。这套最适合你们当前的科技新闻场景，也更接近 Exa Search 官方支持的稳定参数。")
+        st.caption("Exa 仍然保留为可选引擎：`auto + news + highlights`。只有切到 Exa 或混合搜索时，下列参数才生效。")
         exa_search_type = st.selectbox(
             "Exa 搜索类型",
             ["auto", "fast", "instant", "deep"],
@@ -1308,6 +1483,7 @@ if not st.session_state.report_ready:
                         tavily_key,
                         company_pack=company_pack,
                         search_provider=active_search_provider,
+                        tavily_settings=tavily_search_settings,
                         exa_key=exa_key,
                         exa_settings=exa_search_settings,
                     )
@@ -1359,7 +1535,11 @@ if not st.session_state.report_ready:
                         jina_key=jina_key,
                         max_chars_per_source=MAX_SOURCE_CHARS_PER_URL,
                     )
-                    crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(freshness_warnings)
+                    crawl_result["warnings"] = (
+                        list(crawl_result.get("warnings", []))
+                        + list(source_quality_warnings)
+                        + list(freshness_warnings)
+                    )
                     past_memories = mem_manager.get_topic_context(topic, history_limit=3, event_limit=4)
                     final_news_list, new_insight = map_reduce_analysis(
                         ai,
@@ -1488,7 +1668,13 @@ if not st.session_state.report_ready:
         industry_topics = get_industry_topics()
         active_search_provider, search_notices = resolve_search_provider(search_provider, tavily_key, exa_key)
 
-        def run_industry_pipeline(industry_topic_list, domain_text, china_mode=False, query_suffix=""):
+        def run_industry_pipeline(
+            industry_topic_list,
+            domain_text,
+            china_mode=False,
+            query_suffix="",
+            strict_unknown_sources=False,
+        ):
             ai, light_ai, ai_notices = build_ai_stack(
                 api_key,
                 model_id,
@@ -1523,6 +1709,7 @@ if not st.session_state.report_ready:
                     topic_label = f"{topic_key}（中国专题）" if china_mode else topic_key
                     all_raw_results = []
                     seen_urls = set()
+                    source_quality_warnings = []
                     extra_domains = topic_pack.get("china_domains", []) if china_mode else topic_pack.get("domains", [])
                     effective_domains = merge_sites_text(domain_text, extra_domains) if domain_text else ""
 
@@ -1535,6 +1722,7 @@ if not st.session_state.report_ready:
                             max_results=16,
                             tavily_key=tavily_key,
                             provider=active_search_provider,
+                            tavily_settings=tavily_search_settings,
                             exa_key=exa_key,
                             exa_settings=exa_search_settings,
                         )
@@ -1551,12 +1739,36 @@ if not st.session_state.report_ready:
                     if not all_raw_results:
                         return index, None, None
 
+                    trusted_source_domains = merge_sites_text(effective_domains, extra_domains) if effective_domains else "\n".join(extra_domains)
+                    if strict_unknown_sources:
+                        all_raw_results, source_quality_stats, source_quality_warnings = filter_results_for_source_quality(
+                            all_raw_results,
+                            trusted_domains=trusted_source_domains,
+                            strict_unknown=True,
+                        )
+                        print(
+                            f"🔒 行业流可信源过滤 {topic_label}: "
+                            f"输入 {source_quality_stats.get('input_count', 0)} / "
+                            f"保留 {source_quality_stats.get('kept_count', 0)} / "
+                            f"丢弃未知 {source_quality_stats.get('dropped_unknown_count', 0)} / "
+                            f"丢弃低可信 {source_quality_stats.get('dropped_low_trust_count', 0)}"
+                        )
+                    if not all_raw_results:
+                        deep_empty, timeline_empty = build_empty_section_payload(
+                            topic_label,
+                            warnings=source_quality_warnings,
+                            freshness_stats={},
+                            focus_tags=topic_pack.get("tags", []),
+                        )
+                        return index, deep_empty, timeline_empty
+
                     top_results = rank_results_by_pack(all_raw_results, topic_pack, limit=30)
                     top_results, freshness_stats, freshness_warnings = audit_results_for_freshness(
                         top_results,
                         time_limit_dict[time_opt],
                         current_dt,
                     )
+                    freshness_warnings = list(source_quality_warnings) + list(freshness_warnings)
                     top_results = rank_results_by_pack(top_results, topic_pack, limit=30)
                     if not top_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
@@ -1688,7 +1900,12 @@ if not st.session_state.report_ready:
             start_cn_industry_btn = st.button("🇨🇳 一键并发生成《中国公司中文站点专题》", type="secondary", key="btn_industry_cn")
 
         if start_industry_btn and active_search_provider:
-            all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(industry_topics, search_domain, china_mode=False)
+            all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(
+                industry_topics,
+                search_domain,
+                china_mode=False,
+                strict_unknown_sources=industry_strict_unknown_sources,
+            )
             if all_deep_data or all_timeline_data:
                 store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name, run_metadata=search_runtime)
                 st.rerun()
@@ -1703,6 +1920,7 @@ if not st.session_state.report_ready:
                 china_sites,
                 china_mode=True,
                 query_suffix=china_query_suffix,
+                strict_unknown_sources=industry_strict_unknown_sources,
             )
             if all_deep_data or all_timeline_data:
                 store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name, run_metadata=search_runtime)
