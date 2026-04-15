@@ -1257,7 +1257,7 @@ with st.sidebar:
             "exclude_text": exa_exclude_text,
         }
 
-    file_name = st.text_input("导出文件名", f"高管战报_{datetime.date.today()}")
+    file_name = st.text_input("导出文件名", f"FPC-RD科技资讯_{datetime.date.today()}")
 
 st.title("🧠 商业情报战情室（事件主档统一版）")
 
