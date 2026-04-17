@@ -82,6 +82,46 @@ def _load_local_secret_fallback():
     return _LOCAL_SECRET_CACHE
 
 import streamlit as st
+def _extract_json_object_candidate(raw_text):
+    text = str(raw_text or '').strip()
+    if not text:
+        return ''
+    if text.startswith('```'):
+        text = text.strip('`').strip()
+        if text.lower().startswith('json'):
+            text = text[4:].strip()
+    start = text.find('{')
+    if start == -1:
+        start = text.find('[')
+    if start == -1:
+        return text
+    opening = text[start]
+    closing = '}' if opening == '{' else ']'
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == opening:
+            depth += 1
+        elif ch == closing:
+            depth -= 1
+            if depth == 0:
+                return text[start:idx + 1]
+    return text[start:]
+
+
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
@@ -244,12 +284,12 @@ class AI_Driver:
                 # with plain text JSON instructions so the toggle remains non-breaking.
                 res = self._request_completion(messages, force_plain_json=True)
             content = res.choices[0].message.content.strip()
-            if content.startswith("```"):
-                content = content.strip("`").strip()
-                if content.lower().startswith("json"):
-                    content = content[4:].strip()
-
-            data = json.loads(content)
+            candidate = _extract_json_object_candidate(content)
+            try:
+                data = json.loads(candidate)
+            except json.JSONDecodeError:
+                sanitized = candidate.replace("\r", " ").replace("\n", " ").replace("\t", " ").strip()
+                data = json.loads(sanitized)
             if isinstance(data, list):
                 data = {list(structure_class.model_fields.keys())[0]: data}
             return structure_class(**data)
@@ -847,6 +887,13 @@ def collect_company_search_results(
     company_pack = company_pack or get_company_query_pack(topic)
     merged_results = []
     seen_urls = set()
+    source_quality_warnings = []
+    source_quality_stats = {
+        "input_count": 0,
+        "kept_count": 0,
+        "dropped_unknown_count": 0,
+        "dropped_low_trust_count": 0,
+    }
     normalized_sites_text = str(sites_text or "").strip()
     default_sites_text = str(get_default_sites_text() or "").strip()
     use_custom_domain_filter = bool(normalized_sites_text) and normalized_sites_text != default_sites_text
@@ -876,6 +923,11 @@ def collect_company_search_results(
             trusted_domains=trusted_source_domains,
             strict_unknown=True,
         )
+        for key in source_quality_stats:
+            source_quality_stats[key] += int(quality_stats.get(key, 0) or 0)
+        for warning in quality_warnings or []:
+            if warning not in source_quality_warnings:
+                source_quality_warnings.append(warning)
         if quality_warnings:
             print(f"ℹ️ Source quality filter for {topic}: {quality_stats} | {'；'.join(quality_warnings)}")
         for item in batch or []:
@@ -886,7 +938,8 @@ def collect_company_search_results(
                 seen_urls.add(url)
             merged_results.append(item)
     rank_limit = 60 if company_pack.get("id") != "generic" else 48
-    return rank_results_by_company_pack(merged_results, company_pack, limit=rank_limit)
+    ranked_results = rank_results_by_company_pack(merged_results, company_pack, limit=rank_limit)
+    return ranked_results, source_quality_stats, source_quality_warnings
 
 
 
@@ -1476,7 +1529,7 @@ if not st.session_state.report_ready:
                     company_pack = get_company_query_pack(topic)
                     focus_tags = company_pack.get("keywords", [])[:8]
                     company_focus_hint = build_company_focus_hint(company_pack)
-                    raw_results = collect_company_search_results(
+                    raw_results, source_quality_stats, source_quality_warnings = collect_company_search_results(
                         topic,
                         sites,
                         time_limit_dict[time_opt],
