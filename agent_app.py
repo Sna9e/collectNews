@@ -10,6 +10,7 @@ import sys
 import tomllib
 import traceback
 from pathlib import Path
+from typing import Any, get_args, get_origin
 
 from agents.deep_analyst import map_reduce_analysis
 from agents.timeline_agent import build_event_blueprints, generate_timeline
@@ -124,6 +125,126 @@ def _extract_json_object_candidate(raw_text):
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
+
+
+def _field_has_default(field_info):
+    return (not field_info.is_required()) or (field_info.default_factory is not None)
+
+
+def _field_default_value(field_info):
+    if field_info.default_factory is not None:
+        try:
+            return field_info.default_factory()
+        except Exception:
+            return None
+    if field_info.is_required():
+        return None
+    return field_info.default
+
+
+def _resolve_model_type(annotation):
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    origin = get_origin(annotation)
+    if origin is None:
+        return None
+    for arg in get_args(annotation):
+        model_type = _resolve_model_type(arg)
+        if model_type is not None:
+            return model_type
+    return None
+
+
+def _annotation_kind(annotation):
+    origin = get_origin(annotation)
+    if origin in (list, tuple, set):
+        return 'list'
+    if origin is dict:
+        return 'dict'
+    if origin is not None:
+        args = [arg for arg in get_args(annotation) if arg is not type(None)]
+        if len(args) == 1:
+            return _annotation_kind(args[0])
+    if annotation in (list, tuple, set):
+        return 'list'
+    if annotation is dict:
+        return 'dict'
+    if annotation in (str,):
+        return 'str'
+    if annotation in (bool,):
+        return 'bool'
+    if annotation in (int, float):
+        return 'number'
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return 'model'
+    return None
+
+
+def _normalize_with_model_defaults(payload, model_cls):
+    if not isinstance(payload, dict):
+        payload = {}
+
+    normalized = dict(payload)
+    for field_name, field_info in model_cls.model_fields.items():
+        annotation = field_info.annotation
+        model_type = _resolve_model_type(annotation)
+        kind = _annotation_kind(annotation)
+        value = normalized.get(field_name, None)
+
+        if value is None:
+            default_value = _field_default_value(field_info)
+            if default_value is not None:
+                normalized[field_name] = default_value
+                value = normalized[field_name]
+            elif model_type is not None:
+                normalized[field_name] = _normalize_with_model_defaults({}, model_type)
+                value = normalized[field_name]
+            elif kind == 'list':
+                normalized[field_name] = []
+                value = normalized[field_name]
+            elif kind == 'dict':
+                normalized[field_name] = {}
+                value = normalized[field_name]
+            elif kind == 'str' and _field_has_default(field_info):
+                normalized[field_name] = ''
+                value = normalized[field_name]
+            elif kind == 'bool' and _field_has_default(field_info):
+                normalized[field_name] = False
+                value = normalized[field_name]
+            elif kind == 'number' and _field_has_default(field_info):
+                fallback_number = _field_default_value(field_info)
+                if fallback_number is not None:
+                    normalized[field_name] = fallback_number
+                    value = normalized[field_name]
+
+        if value is None:
+            continue
+
+        if model_type is not None and isinstance(value, dict):
+            normalized[field_name] = _normalize_with_model_defaults(value, model_type)
+            continue
+
+        if kind == 'list' and isinstance(value, list):
+            item_model = None
+            for arg in get_args(annotation):
+                resolved = _resolve_model_type(arg)
+                if resolved is not None:
+                    item_model = resolved
+                    break
+            if item_model is not None:
+                validated_items = []
+                for item in value:
+                    if not isinstance(item, dict):
+                        continue
+                    normalized_item = _normalize_with_model_defaults(item, item_model)
+                    try:
+                        validated_item = item_model.model_validate(normalized_item)
+                    except Exception:
+                        continue
+                    validated_items.append(validated_item.model_dump())
+                normalized[field_name] = validated_items
+
+    return normalized
 
 
 st.set_page_config(page_title="DeepSeek 部门情报中心", page_icon="🧠", layout="wide")
@@ -292,7 +413,8 @@ class AI_Driver:
                 data = json.loads(sanitized)
             if isinstance(data, list):
                 data = {list(structure_class.model_fields.keys())[0]: data}
-            return structure_class(**data)
+            normalized_data = _normalize_with_model_defaults(data, structure_class)
+            return structure_class.model_validate(normalized_data)
         except Exception as e:
             print(f"⚠️ AI 结构化解析失败: {e}")
             return None
@@ -594,10 +716,10 @@ def resolve_search_provider(selected_provider, tavily_key, exa_key):
 
 
 class FinanceCatalysts(BaseModel):
-    policy: str = Field(description="【政策发布】限40字")
-    earnings: str = Field(description="【财报表现】限40字")
-    landmark: str = Field(description="【产业标志】限40字")
-    style: str = Field(description="【市场风格轮动】限40字")
+    policy: str = Field(default="", description="【政策发布】限40字")
+    earnings: str = Field(default="", description="【财报表现】限40字")
+    landmark: str = Field(default="", description="【产业标志】限40字")
+    style: str = Field(default="", description="【市场风格轮动】限40字")
 
 
 
