@@ -260,8 +260,8 @@ SESSION_DEFAULTS = {
 }
 
 LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
-EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY = 18
-EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY = 16
+EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY = 24
+EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY = 20
 ANALYSIS_EVENT_LIMIT = 8
 COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
@@ -1391,74 +1391,22 @@ with st.sidebar:
     jina_key = _get_runtime_secret("JINA_API_KEY", "")
     gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
     gist_id = _get_runtime_secret("GIST_ID", "")
-    if (api_key or gemini_key) and (tavily_key or exa_key):
+    if api_key and (tavily_key or exa_key):
         st.success("🔐 部门专属安全引擎已连接")
     else:
-        st.error("⚠️ 未检测到可用的搜索或模型密钥，请补充 API Key。")
+        st.error("⚠️ 当前需配置可用的 DeepSeek 与搜索密钥，请检查 DEEPSEEK_API_KEY / TAVILY_API_KEY / EXA_API_KEY。")
 
     st.divider()
     model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
-    use_gemini_main = st.toggle(
-        "使用 Gemini AI Studio 作为主模型（保留当前 Prompt）",
-        key="use_gemini_main",
-    )
-    gemini_main_preset_col1, gemini_main_preset_col2 = st.columns(2)
-    with gemini_main_preset_col1:
-        if st.button("切到 Gemini 3 Flash", key="btn_gemini_3_flash_main", disabled=not gemini_key):
-            apply_gemini_3_flash_main_preset()
-    with gemini_main_preset_col2:
-        if st.button("尝试 3.1 Flash-Lite", key="btn_gemini_31_flash_lite_main", disabled=not gemini_key):
-            apply_gemini_31_flash_lite_main_preset()
-    gemini_main_model_choice = st.selectbox(
-        "Gemini 主模型",
-        GEMINI_MODEL_OPTIONS,
-        key="gemini_main_model",
-        disabled=not use_gemini_main,
-        format_func=format_gemini_model_option,
-    )
-    gemini_main_model_custom = st.text_input(
-        "Gemini 主模型自定义 ID",
-        key="gemini_main_model_custom",
-        disabled=(not use_gemini_main or gemini_main_model_choice != "__custom__"),
-        placeholder="例如：gemini-3.1-flash-lite-preview",
-    )
-    gemini_main_model = resolve_gemini_model_name(
-        gemini_main_model_choice,
-        gemini_main_model_custom,
-        DEFAULT_GEMINI_MAIN_MODEL,
-    )
-    if use_gemini_main:
-        if gemini_key:
-            st.caption(
-                "主模型可切到 Gemini AI Studio；这会复用当前同一套 Prompt、输出结构和页面，不改业务链路。"
-                " `Gemini 3.1 Flash-Lite` 这里按公开命名规则做了预设，若你的账号尚未开放该预览 ID，可改回 Gemini 3 Flash 或手动填写。"
-            )
-        else:
-            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为 DeepSeek。")
-    use_gemini_light = st.toggle("启用 Gemini AI Studio 轻任务引擎（保留当前主功能）", key="use_gemini_light")
-    gemini_light_model_choice = st.selectbox(
-        "Gemini 轻任务模型",
-        GEMINI_MODEL_OPTIONS,
-        key="gemini_light_model",
-        disabled=not use_gemini_light,
-        format_func=format_gemini_model_option,
-    )
-    gemini_light_model_custom = st.text_input(
-        "Gemini 轻任务自定义 ID",
-        key="gemini_light_model_custom",
-        disabled=(not use_gemini_light or gemini_light_model_choice != "__custom__"),
-        placeholder="例如：gemini-3.1-flash-lite-preview",
-    )
-    gemini_light_model = resolve_gemini_model_name(
-        gemini_light_model_choice,
-        gemini_light_model_custom,
-        DEFAULT_GEMINI_LIGHT_MODEL,
-    )
-    if use_gemini_light:
-        if gemini_key:
-            st.caption("当前按 Google AI Studio 的 OpenAI 兼容接口接入。轻任务包括：事件主档抽取、切片候选提取。最终长新闻成稿仍由 DeepSeek 负责。")
-        else:
-            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为全 DeepSeek，不影响现有功能。")
+    if st.session_state.get("use_gemini_main"):
+        st.session_state.use_gemini_main = False
+    if st.session_state.get("use_gemini_light"):
+        st.session_state.use_gemini_light = False
+    use_gemini_main = False
+    use_gemini_light = False
+    gemini_main_model = DEFAULT_GEMINI_MAIN_MODEL
+    gemini_light_model = DEFAULT_GEMINI_LIGHT_MODEL
+    st.caption("当前模型链路固定使用 DeepSeek。Gemini Key 已暂不纳入本轮运行与排障范围。")
     time_opt = st.selectbox("回溯时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
     search_provider = st.selectbox(
         "搜索引擎",
@@ -1631,7 +1579,7 @@ if not st.session_state.report_ready:
                 gemini_main_model=gemini_main_model,
             )
             if not ai.valid:
-                st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
+                st.error("当前没有可用的主模型密钥。请先配置 DEEPSEEK_API_KEY。")
                 st.stop()
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
@@ -1859,7 +1807,7 @@ if not st.session_state.report_ready:
                 gemini_main_model=gemini_main_model,
             )
             if not ai.valid:
-                st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
+                st.error("当前没有可用的主模型密钥。请先配置 DEEPSEEK_API_KEY。")
                 return [], [], "未启用模型", {}
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
