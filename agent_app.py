@@ -1216,12 +1216,11 @@ def render_timeline_preview(timeline_data):
 
             detail_html = ""
             if appears_later:
-                matched_news_line = "已在后续长新闻中展开"
+                matched_news_line = "该事件已在后续长新闻中展开"
                 if should_show_matched_title(event_text, matched_title):
                     matched_news_line = matched_title
                 detail_html = (
-                    f"<div style='margin-top:8px;color:#7c2d12;'><strong>对应长新闻：</strong>{matched_news_line}</div>"
-                    f"<div style='margin-top:4px;color:#7c2d12;'><strong>出现原因：</strong>{match_reason}</div>"
+                    f"<div style='margin-top:8px;color:#7c2d12;'><strong>后续长新闻：</strong>{matched_news_line}</div>"
                 )
 
             st.markdown(
