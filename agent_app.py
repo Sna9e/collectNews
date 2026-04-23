@@ -266,6 +266,62 @@ ANALYSIS_EVENT_LIMIT = 8
 COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
 MAX_SOURCE_CHARS_PER_URL = 2400
+REPORT_SCOPE_PROFILES = {
+    "24h 日报": {
+        "key": "daily_24h",
+        "display_name": "24h日报",
+        "time_prompt": "过去 24 小时",
+        "time_flag": "d",
+        "summary_title": "",
+        "analysis_min_news": 4,
+        "analysis_max_news": 5,
+        "event_input_limit_company": 24,
+        "event_input_limit_industry": 20,
+        "analysis_event_limit": 8,
+        "company_crawl_url_limit": 10,
+        "industry_crawl_url_limit": 8,
+        "company_search_per_query_limit": 18,
+        "company_rank_limit": 60,
+        "industry_search_max_results": 16,
+        "industry_rank_limit": 30,
+    },
+    "7天 周报": {
+        "key": "weekly_7d",
+        "display_name": "7天周报",
+        "time_prompt": "过去 1 周（周报）",
+        "time_flag": "w",
+        "summary_title": "本周主题总结",
+        "analysis_min_news": 6,
+        "analysis_max_news": 8,
+        "event_input_limit_company": 36,
+        "event_input_limit_industry": 30,
+        "analysis_event_limit": 12,
+        "company_crawl_url_limit": 14,
+        "industry_crawl_url_limit": 10,
+        "company_search_per_query_limit": 24,
+        "company_rank_limit": 84,
+        "industry_search_max_results": 20,
+        "industry_rank_limit": 42,
+    },
+    "30天 观察": {
+        "key": "monthly_30d",
+        "display_name": "30天观察",
+        "time_prompt": "过去 1 个月（观察）",
+        "time_flag": "m",
+        "summary_title": "本月主题总结",
+        "analysis_min_news": 6,
+        "analysis_max_news": 8,
+        "event_input_limit_company": 40,
+        "event_input_limit_industry": 32,
+        "analysis_event_limit": 12,
+        "company_crawl_url_limit": 14,
+        "industry_crawl_url_limit": 10,
+        "company_search_per_query_limit": 24,
+        "company_rank_limit": 90,
+        "industry_search_max_results": 20,
+        "industry_rank_limit": 48,
+    },
+}
 DEFAULT_GEMINI_LIGHT_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_GEMINI_MAIN_MODEL = "gemini-2.5-flash-lite"
 GEMINI_3_FLASH_PREVIEW_MODEL = "gemini-3-flash-preview"
@@ -593,6 +649,35 @@ def normalize_focus_tags(tags):
     return merged
 
 
+def get_report_scope_profile(selection):
+    selected_key = str(selection or "24h 日报").strip()
+    base = REPORT_SCOPE_PROFILES.get(selected_key) or REPORT_SCOPE_PROFILES["24h 日报"]
+    profile = dict(base)
+    profile["selection_label"] = selected_key
+    return profile
+
+
+def attach_report_scope_meta(payload, report_profile, overall_insight=""):
+    item = dict(payload or {})
+    profile = dict(report_profile or {})
+    if profile:
+        item["report_scope_key"] = profile.get("key", "")
+        item["report_scope_label"] = profile.get("display_name", "")
+        item["report_window_label"] = profile.get("time_prompt", "")
+        item["topic_summary_title"] = profile.get("summary_title", "")
+    if str(overall_insight or "").strip():
+        item["overall_insight"] = str(overall_insight or "").strip()
+    return item
+
+
+def get_section_summary_title(section):
+    summary_text = str(get_value(section, "overall_insight", "") or "").strip()
+    summary_title = str(get_value(section, "topic_summary_title", "") or "").strip()
+    if summary_text and summary_title:
+        return summary_title
+    return ""
+
+
 _INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\\\|?*]+')
 
 
@@ -616,10 +701,11 @@ def normalize_report_sections(sections):
 
 
 
-def build_run_metadata(requested_provider, resolved_provider, notices, diagnostics):
+def build_run_metadata(requested_provider, resolved_provider, notices, diagnostics, report_profile=None):
     diagnostics = diagnostics or {}
     providers = diagnostics.get("providers", {}) or {}
     fallback_triggered = bool(notices)
+    report_profile = dict(report_profile or {})
 
     if requested_provider == "exa" and providers.get("exa", {}).get("failure", 0) > 0:
         fallback_triggered = True
@@ -635,6 +721,8 @@ def build_run_metadata(requested_provider, resolved_provider, notices, diagnosti
         "notices": list(notices or []),
         "diagnostics": diagnostics,
         "fallback_triggered": bool(fallback_triggered),
+        "report_scope_label": report_profile.get("display_name", ""),
+        "report_window_label": report_profile.get("time_prompt", ""),
     }
 
 
@@ -650,6 +738,8 @@ def render_search_runtime_panel(run_metadata):
     providers = diagnostics.get("providers", {}) or {}
 
     summary_parts = [
+        f"报告模式：{meta.get('report_scope_label') or '未指定'}",
+        f"窗口：{meta.get('report_window_label') or '未指定'}",
         f"请求引擎：{requested_label}",
         f"实际启用：{resolved_label}",
         f"是否回退：{'是' if meta.get('fallback_triggered') else '否'}",
@@ -900,6 +990,17 @@ def _score_result_for_event(event_dict, result):
     return round(ratio * 0.52 + overlap * 0.34 + min(keyword_hits * 0.07, 0.21), 4)
 
 
+def _best_blueprint_support_score(result, blueprint_payload):
+    best_score = 0.0
+    best_event_id = ""
+    for event_dict in blueprint_payload or []:
+        score = _score_result_for_event(event_dict, result)
+        if score > best_score:
+            best_score = score
+            best_event_id = event_dict.get("event_id", "") or ""
+    return best_score, best_event_id
+
+
 
 def select_analysis_candidates(event_blueprints, raw_results, max_events=ANALYSIS_EVENT_LIMIT, max_urls=COMPANY_CRAWL_URL_LIMIT):
     blueprint_payload = _serialize_event_blueprints(event_blueprints)
@@ -971,15 +1072,46 @@ def select_analysis_candidates(event_blueprints, raw_results, max_events=ANALYSI
             if len(selected_results) >= max_urls:
                 break
 
+    supplemental_rows = []
     for result in ranked_results:
+        support_score, support_event_id = _best_blueprint_support_score(result, blueprint_payload)
+        if support_score < 0.18:
+            continue
+        supplemental_rows.append(
+            {
+                "score": support_score,
+                "event_id": support_event_id,
+                "recency": result.get("published_at_resolved") or result.get("published_date") or "",
+                "result": result,
+            }
+        )
+
+    supplemental_rows.sort(
+        key=lambda row: (row["score"], row["recency"]),
+        reverse=True,
+    )
+    for row in supplemental_rows:
         if len(selected_results) >= max_urls:
             break
+        result = row["result"]
         url = result.get("url", "")
         if url and url in seen_urls:
             continue
         if url:
             seen_urls.add(url)
         selected_results.append(result)
+
+    minimum_urls = min(max_urls, max(2, len(chosen_rows)))
+    if len(selected_results) < minimum_urls:
+        for result in ranked_results:
+            if len(selected_results) >= max_urls:
+                break
+            url = result.get("url", "")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            selected_results.append(result)
 
     return candidate_events or blueprint_payload[:max_events], selected_results[:max_urls]
 
@@ -1005,6 +1137,8 @@ def collect_company_search_results(
     tavily_settings=None,
     exa_key="",
     exa_settings=None,
+    per_query_limit=None,
+    rank_limit=None,
 ):
     company_pack = company_pack or get_company_query_pack(topic)
     merged_results = []
@@ -1027,7 +1161,8 @@ def collect_company_search_results(
         normalized_sites_text or default_sites_text,
         company_pack.get("domains", []),
     )
-    per_query_limit = 18 if company_pack.get("id") != "generic" else 16
+    if per_query_limit is None:
+        per_query_limit = 18 if company_pack.get("id") != "generic" else 16
     for query in build_company_queries_from_pack(topic, company_pack):
         batch = search_web(
             query,
@@ -1059,7 +1194,8 @@ def collect_company_search_results(
             if url:
                 seen_urls.add(url)
             merged_results.append(item)
-    rank_limit = 60 if company_pack.get("id") != "generic" else 48
+    if rank_limit is None:
+        rank_limit = 60 if company_pack.get("id") != "generic" else 48
     ranked_results = rank_results_by_company_pack(merged_results, company_pack, limit=rank_limit)
     return ranked_results, source_quality_stats, source_quality_warnings
 
@@ -1092,11 +1228,11 @@ def collect_source_material(raw_results, max_urls, jina_key, max_chars_per_sourc
 
 
 
-def build_empty_section_payload(topic, warnings=None, freshness_stats=None, focus_tags=None):
+def build_empty_section_payload(topic, warnings=None, freshness_stats=None, focus_tags=None, report_profile=None):
     warnings = list(warnings or [])
     freshness_stats = freshness_stats or {}
     focus_tags = normalize_focus_tags(focus_tags or [])
-    empty_deep = {
+    empty_deep = attach_report_scope_meta({
         "topic": topic,
         "data": [],
         "finance": {},
@@ -1106,25 +1242,25 @@ def build_empty_section_payload(topic, warnings=None, freshness_stats=None, focu
         "extraction_stats": {},
         "freshness_stats": freshness_stats,
         "focus_tags": focus_tags,
-    }
-    empty_timeline = {
+    }, report_profile)
+    empty_timeline = attach_report_scope_meta({
         "topic": topic,
         "events": [],
         "warnings": warnings,
         "extraction_stats": {},
         "freshness_stats": freshness_stats,
         "focus_tags": focus_tags,
-    }
+    }, report_profile)
     return empty_deep, empty_timeline
 
 
-
-def build_error_section_payload(topic, error_text, freshness_stats=None, focus_tags=None):
+def build_error_section_payload(topic, error_text, freshness_stats=None, focus_tags=None, report_profile=None):
     return build_empty_section_payload(
         topic,
         warnings=[f"专题处理失败：{error_text}"],
         freshness_stats=freshness_stats,
         focus_tags=focus_tags,
+        report_profile=report_profile,
     )
 
 
@@ -1246,6 +1382,10 @@ def render_deep_news_preview(report_data):
     for section in report_data:
         topic = get_value(section, "topic", "未命名专题")
         st.markdown(f"### 深度研报：{topic}")
+        summary_title = get_section_summary_title(section)
+        summary_text = str(get_value(section, "overall_insight", "") or "").strip()
+        if summary_title and summary_text:
+            st.info(f"{summary_title}：{summary_text}")
         focus_tags = get_value(section, "focus_tags", [])
         if focus_tags:
             st.caption(f"重点标签：{'、'.join(focus_tags[:8])}")
@@ -1317,7 +1457,7 @@ def render_quality_panel(report_data, timeline_data):
         return
 
     st.markdown("### 抓取质量面板")
-    st.caption("每个专题都会显示 Jina 全文、网页直连、摘要兜底的占比，以及 24h 新鲜度审查结果。")
+    st.caption("每个专题都会显示 Jina 全文、网页直连、摘要兜底的占比，以及当前报告窗口下的时效审查结果。")
 
     for section in visible_sections:
         topic = html.escape(str(get_value(section, "topic", "未命名专题")))
@@ -1407,7 +1547,11 @@ with st.sidebar:
     gemini_main_model = DEFAULT_GEMINI_MAIN_MODEL
     gemini_light_model = DEFAULT_GEMINI_LIGHT_MODEL
     st.caption("当前模型链路固定使用 DeepSeek。Gemini Key 已暂不纳入本轮运行与排障范围。")
-    time_opt = st.selectbox("回溯时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
+    report_scope_choice = st.selectbox("报告模式", list(REPORT_SCOPE_PROFILES.keys()), index=0)
+    report_profile = get_report_scope_profile(report_scope_choice)
+    time_opt = report_profile["time_prompt"]
+    time_flag = report_profile["time_flag"]
+    st.caption(f"当前报告模式：{report_profile['display_name']} | 时间窗口：{time_opt}")
     search_provider = st.selectbox(
         "搜索引擎",
         ["tavily", "hybrid", "exa"],
@@ -1415,7 +1559,6 @@ with st.sidebar:
         format_func=format_search_provider_option,
     )
     enable_finance_chain = st.toggle("上市公司金融补链（更耗 token）", value=False)
-    time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m"}
 
     with st.expander("⚙️ 高级搜索源设置"):
         sites = st.text_area("重点搜索源", get_default_sites_text(), height=250)
@@ -1559,7 +1702,7 @@ with st.sidebar:
 st.title("🧠 商业情报战情室（事件主档统一版）")
 
 if not st.session_state.report_ready:
-    tab1, tab2 = st.tabs(["📚 频道一：公司追踪（带金融量化）", "🌐 频道二：每日宏观行业早报（全域扫描）"])
+    tab1, tab2 = st.tabs(["📚 频道一：公司追踪（带金融量化）", "🌐 频道二：宏观行业扫描（日/周报）"])
 
     with tab1:
         st.markdown("💡 **操作指南**：输入追踪对象，多个目标请使用 `\\` 分开，系统会并发执行独立分析。")
@@ -1601,13 +1744,15 @@ if not st.session_state.report_ready:
                     raw_results, source_quality_stats, source_quality_warnings = collect_company_search_results(
                         topic,
                         sites,
-                        time_limit_dict[time_opt],
+                        time_flag,
                         tavily_key,
                         company_pack=company_pack,
                         search_provider=active_search_provider,
                         tavily_settings=tavily_search_settings,
                         exa_key=exa_key,
                         exa_settings=exa_search_settings,
+                        per_query_limit=report_profile.get("company_search_per_query_limit"),
+                        rank_limit=report_profile.get("company_rank_limit"),
                     )
                     if not raw_results:
                         empty_warning = f"未召回到符合条件的 {topic} 新闻，请扩大搜索源或放宽时间范围。"
@@ -1615,24 +1760,33 @@ if not st.session_state.report_ready:
                             topic,
                             warnings=[empty_warning],
                             focus_tags=focus_tags,
+                            report_profile=report_profile,
                         )
                         return index, deep_empty, timeline_empty
                     raw_results, freshness_stats, freshness_warnings = audit_results_for_freshness(
                         raw_results,
-                        time_limit_dict[time_opt],
+                        time_flag,
                         current_dt,
                     )
-                    raw_results = rank_results_by_company_pack(raw_results, company_pack, limit=40)
+                    raw_results = rank_results_by_company_pack(
+                        raw_results,
+                        company_pack,
+                        limit=min(
+                            int(report_profile.get("company_rank_limit", 60) or 60),
+                            56 if time_flag != "d" else 40,
+                        ),
+                    )
                     if not raw_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic,
                             warnings=freshness_warnings,
                             freshness_stats=freshness_stats,
                             focus_tags=focus_tags,
+                            report_profile=report_profile,
                         )
                         return index, deep_empty, timeline_empty
 
-                    event_seed_results = raw_results[:EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY]
+                    event_seed_results = raw_results[: int(report_profile.get("event_input_limit_company", EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY) or EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY)]
                     history_hint = mem_manager.get_event_bank_summary(topic, limit=4)
                     event_blueprints = build_event_blueprints(
                         ai,
@@ -1648,12 +1802,12 @@ if not st.session_state.report_ready:
                     analysis_events, analysis_results = select_analysis_candidates(
                         event_blueprints,
                         raw_results,
-                        max_events=ANALYSIS_EVENT_LIMIT,
-                        max_urls=COMPANY_CRAWL_URL_LIMIT,
+                        max_events=int(report_profile.get("analysis_event_limit", ANALYSIS_EVENT_LIMIT) or ANALYSIS_EVENT_LIMIT),
+                        max_urls=int(report_profile.get("company_crawl_url_limit", COMPANY_CRAWL_URL_LIMIT) or COMPANY_CRAWL_URL_LIMIT),
                     )
                     crawl_result = collect_source_material(
                         analysis_results,
-                        max_urls=COMPANY_CRAWL_URL_LIMIT,
+                        max_urls=int(report_profile.get("company_crawl_url_limit", COMPANY_CRAWL_URL_LIMIT) or COMPANY_CRAWL_URL_LIMIT),
                         jina_key=jina_key,
                         max_chars_per_source=MAX_SOURCE_CHARS_PER_URL,
                     )
@@ -1675,6 +1829,7 @@ if not st.session_state.report_ready:
                         guidance=company_focus_hint,
                         raw_search_results=analysis_results,
                         map_ai_driver=light_ai,
+                        report_profile=report_profile,
                     )
 
                     deep_data_res = None
@@ -1695,7 +1850,7 @@ if not st.session_state.report_ready:
                                     if cats:
                                         finance_data["catalysts"] = cats.model_dump()
 
-                            deep_data_res = {
+                            deep_data_res = attach_report_scope_meta({
                                 "topic": topic,
                                 "data": deduped_news,
                                 "finance": finance_data,
@@ -1705,18 +1860,18 @@ if not st.session_state.report_ready:
                                 "extraction_stats": crawl_result.get("stats", {}),
                                 "freshness_stats": freshness_stats,
                                 "focus_tags": focus_tags,
-                            }
+                            }, report_profile, overall_insight=new_insight)
                             if new_insight:
                                 mem_manager.add_topic_memory(topic, current_date_str, new_insight)
 
-                    timeline_data_res = {
+                    timeline_data_res = attach_report_scope_meta({
                         "topic": topic,
                         "events": timeline_events,
                         "warnings": list(crawl_result.get("warnings", [])),
                         "extraction_stats": crawl_result.get("stats", {}),
                         "freshness_stats": freshness_stats,
                         "focus_tags": focus_tags,
-                    } if timeline_events else None
+                    }, report_profile) if timeline_events else None
                     return index, deep_data_res, timeline_data_res
                 except Exception as e:
                     trace_text = traceback.format_exc(limit=8)
@@ -1725,6 +1880,7 @@ if not st.session_state.report_ready:
                         topic,
                         f"{e.__class__.__name__}: {e}",
                         focus_tags=locals().get("focus_tags", []),
+                        report_profile=report_profile,
                     )
                     return index, deep_error, timeline_error
 
@@ -1749,6 +1905,7 @@ if not st.session_state.report_ready:
                 resolved_provider=active_search_provider,
                 notices=search_notices,
                 diagnostics=get_search_diagnostics(),
+                report_profile=report_profile,
             )
             st.success("✅ 并发深度分析完成。")
 
@@ -1789,6 +1946,16 @@ if not st.session_state.report_ready:
 
         industry_topics = get_industry_topics()
         active_search_provider, search_notices = resolve_search_provider(search_provider, tavily_key, exa_key)
+        industry_report_button_text = {
+            "daily_24h": "🚀 一键并发生成《每日宏观行业早报》",
+            "weekly_7d": "🚀 一键并发生成《每周宏观行业周报》",
+            "monthly_30d": "🚀 一键并发生成《月度宏观行业观察》",
+        }.get(report_profile.get("key", "daily_24h"), "🚀 一键并发生成《每日宏观行业早报》")
+        cn_report_button_text = {
+            "daily_24h": "🇨🇳 一键并发生成《中国公司中文站点专题》",
+            "weekly_7d": "🇨🇳 一键并发生成《中国公司中文周报专题》",
+            "monthly_30d": "🇨🇳 一键并发生成《中国公司中文月度专题》",
+        }.get(report_profile.get("key", "daily_24h"), "🇨🇳 一键并发生成《中国公司中文站点专题》")
 
         def run_industry_pipeline(
             industry_topic_list,
@@ -1840,8 +2007,8 @@ if not st.session_state.report_ready:
                         results = search_web(
                             actual_query,
                             effective_domains,
-                            time_limit_dict[time_opt],
-                            max_results=16,
+                            time_flag,
+                            max_results=int(report_profile.get("industry_search_max_results", 16) or 16),
                             tavily_key=tavily_key,
                             provider=active_search_provider,
                             tavily_settings=tavily_search_settings,
@@ -1881,27 +2048,37 @@ if not st.session_state.report_ready:
                             warnings=source_quality_warnings,
                             freshness_stats={},
                             focus_tags=topic_pack.get("tags", []),
+                            report_profile=report_profile,
                         )
                         return index, deep_empty, timeline_empty
 
-                    top_results = rank_results_by_pack(all_raw_results, topic_pack, limit=30)
+                    top_results = rank_results_by_pack(
+                        all_raw_results,
+                        topic_pack,
+                        limit=int(report_profile.get("industry_rank_limit", 30) or 30),
+                    )
                     top_results, freshness_stats, freshness_warnings = audit_results_for_freshness(
                         top_results,
-                        time_limit_dict[time_opt],
+                        time_flag,
                         current_dt,
                     )
                     freshness_warnings = list(source_quality_warnings) + list(freshness_warnings)
-                    top_results = rank_results_by_pack(top_results, topic_pack, limit=30)
+                    top_results = rank_results_by_pack(
+                        top_results,
+                        topic_pack,
+                        limit=int(report_profile.get("industry_rank_limit", 30) or 30),
+                    )
                     if not top_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic_label,
                             warnings=freshness_warnings,
                             freshness_stats=freshness_stats,
                             focus_tags=topic_pack.get("tags", []),
+                            report_profile=report_profile,
                         )
                         return index, deep_empty, timeline_empty
                     focus_hint = build_focus_hint(topic_pack, china_mode=china_mode)
-                    event_seed_results = top_results[:EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY]
+                    event_seed_results = top_results[: int(report_profile.get("event_input_limit_industry", EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY) or EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY)]
                     history_hint = mem_manager.get_event_bank_summary(topic_key, limit=4)
                     event_blueprints = build_event_blueprints(
                         ai,
@@ -1917,18 +2094,18 @@ if not st.session_state.report_ready:
                     analysis_events, analysis_results = select_analysis_candidates(
                         event_blueprints,
                         top_results,
-                        max_events=ANALYSIS_EVENT_LIMIT,
-                        max_urls=INDUSTRY_CRAWL_URL_LIMIT,
+                        max_events=int(report_profile.get("analysis_event_limit", ANALYSIS_EVENT_LIMIT) or ANALYSIS_EVENT_LIMIT),
+                        max_urls=int(report_profile.get("industry_crawl_url_limit", INDUSTRY_CRAWL_URL_LIMIT) or INDUSTRY_CRAWL_URL_LIMIT),
                     )
                     crawl_result = collect_source_material(
                         analysis_results,
-                        max_urls=INDUSTRY_CRAWL_URL_LIMIT,
+                        max_urls=int(report_profile.get("industry_crawl_url_limit", INDUSTRY_CRAWL_URL_LIMIT) or INDUSTRY_CRAWL_URL_LIMIT),
                         jina_key=jina_key,
                         max_chars_per_source=MAX_SOURCE_CHARS_PER_URL,
                     )
                     crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(freshness_warnings)
                     past_memories = mem_manager.get_topic_context(topic_key, history_limit=3, event_limit=4)
-                    final_news_list, _ = map_reduce_analysis(
+                    final_news_list, new_insight = map_reduce_analysis(
                         ai,
                         topic_key,
                         crawl_result["content"],
@@ -1943,13 +2120,14 @@ if not st.session_state.report_ready:
                         ),
                         raw_search_results=analysis_results,
                         map_ai_driver=light_ai,
+                        report_profile=report_profile,
                     )
 
                     deep_data_res = None
                     if final_news_list:
                         deduped_news = dedupe_news_items(final_news_list)
                         if deduped_news:
-                            deep_data_res = {
+                            deep_data_res = attach_report_scope_meta({
                                 "topic": topic_label,
                                 "data": deduped_news,
                                 "source_mode": crawl_result["source_mode"],
@@ -1959,16 +2137,16 @@ if not st.session_state.report_ready:
                                 "freshness_stats": freshness_stats,
                                 "focus_tags": topic_pack.get("tags", []),
                                 "watch_entities": topic_pack.get("companies", []),
-                            }
+                            }, report_profile, overall_insight=new_insight)
 
-                    timeline_data_res = {
+                    timeline_data_res = attach_report_scope_meta({
                         "topic": topic_label,
                         "events": timeline_events,
                         "warnings": list(crawl_result.get("warnings", [])),
                         "extraction_stats": crawl_result.get("stats", {}),
                         "freshness_stats": freshness_stats,
                         "focus_tags": topic_pack.get("tags", []),
-                    } if timeline_events else None
+                    }, report_profile) if timeline_events else None
                     return index, deep_data_res, timeline_data_res
                 except Exception as e:
                     topic_label = locals().get("topic_label", topic_pack.get("title", "unknown"))
@@ -1979,6 +2157,7 @@ if not st.session_state.report_ready:
                         f"{e.__class__.__name__}: {e}",
                         freshness_stats=locals().get("freshness_stats", {}),
                         focus_tags=topic_pack.get("tags", []),
+                        report_profile=report_profile,
                     )
                     return index, deep_error, timeline_error
 
@@ -2012,14 +2191,15 @@ if not st.session_state.report_ready:
                     resolved_provider=active_search_provider,
                     notices=search_notices,
                     diagnostics=get_search_diagnostics(),
+                    report_profile=report_profile,
                 ),
             )
 
         col_global, col_cn = st.columns(2)
         with col_global:
-            start_industry_btn = st.button("🚀 一键并发生成《每日宏观行业早报》", type="primary", key="btn_industry")
+            start_industry_btn = st.button(industry_report_button_text, type="primary", key="btn_industry")
         with col_cn:
-            start_cn_industry_btn = st.button("🇨🇳 一键并发生成《中国公司中文站点专题》", type="secondary", key="btn_industry_cn")
+            start_cn_industry_btn = st.button(cn_report_button_text, type="secondary", key="btn_industry_cn")
 
         if start_industry_btn and active_search_provider:
             all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(
@@ -2093,7 +2273,10 @@ else:
         st.caption("橙色高亮表示：这条短新闻会在后续长新闻中继续展开；绿色标签表示：该事件在历史记忆里已被持续跟踪。")
         render_timeline_preview(st.session_state.timeline_data)
     with preview_tab2:
-        st.caption("每条长新闻会显示它承接了哪条核心时间线短新闻，以及为什么被判定为同一事件。")
+        if st.session_state.run_metadata.get("report_scope_label") in {"7天周报", "30天观察"}:
+            st.caption("长周期模式下，每个专题会先展示主题总结，再展开该时间窗口内的热点新闻，并标明它承接了哪条核心时间线。")
+        else:
+            st.caption("每条长新闻会显示它承接了哪条核心时间线短新闻，以及为什么被判定为同一事件。")
         render_deep_news_preview(st.session_state.report_data)
 
     st.divider()
