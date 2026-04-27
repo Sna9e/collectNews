@@ -263,6 +263,7 @@ LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
 EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY = 24
 EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY = 20
 ANALYSIS_EVENT_LIMIT = 8
+TIMELINE_FOCUS_MIN_KEEP = 7
 COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
 MAX_SOURCE_CHARS_PER_URL = 2400
@@ -1175,7 +1176,7 @@ def collect_company_search_results(
         ranked_results,
         topic,
         company_pack,
-        min_keep=6,
+        min_keep=10,
         secondary_min_hits=2,
     )
     if focus_dropped_count:
@@ -1723,7 +1724,7 @@ if not st.session_state.report_ready:
                         timeline_events,
                         topic,
                         company_pack,
-                        min_keep=1,
+                        min_keep=TIMELINE_FOCUS_MIN_KEEP,
                         secondary_min_hits=2,
                     )
                     if timeline_focus_dropped:
@@ -2000,7 +2001,7 @@ if not st.session_state.report_ready:
                         top_results,
                         topic_key,
                         topic_pack,
-                        min_keep=8,
+                        min_keep=12,
                         secondary_min_hits=1,
                     )
                     topic_gate_warnings = []
@@ -2034,7 +2035,7 @@ if not st.session_state.report_ready:
                         timeline_events,
                         topic_key,
                         topic_pack,
-                        min_keep=1,
+                        min_keep=TIMELINE_FOCUS_MIN_KEEP,
                         secondary_min_hits=1,
                     )
                     if timeline_focus_dropped:
