@@ -260,8 +260,8 @@ SESSION_DEFAULTS = {
 }
 
 LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
-EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY = 18
-EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY = 16
+EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY = 24
+EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY = 20
 ANALYSIS_EVENT_LIMIT = 8
 COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
@@ -682,36 +682,10 @@ def render_search_runtime_panel(run_metadata):
 
 
 def resolve_search_provider(selected_provider, tavily_key, exa_key):
-    provider = normalize_search_provider(selected_provider)
     notices = []
-
-    if provider == "hybrid":
-        if tavily_key and exa_key:
-            return "hybrid", notices
-        if exa_key:
-            notices.append("已选择 Tavily + Exa 混合搜索，但当前未检测到 TAVILY_API_KEY，本次自动退回为 Exa。")
-            return "exa", notices
-        if tavily_key:
-            notices.append("已选择 Tavily + Exa 混合搜索，但当前未检测到 EXA_API_KEY，本次自动退回为 Tavily。")
-            return "tavily", notices
-        notices.append("当前既没有 TAVILY_API_KEY，也没有 EXA_API_KEY，本次无法执行搜索。")
-        return "", notices
-
-    if provider == "exa":
-        if exa_key:
-            return "exa", notices
-        if tavily_key:
-            notices.append("已选择 Exa 搜索，但当前未检测到 EXA_API_KEY，本次自动退回为 Tavily。")
-            return "tavily", notices
-        notices.append("当前没有 EXA_API_KEY，且无可回退的 Tavily 引擎。")
-        return "", notices
-
     if tavily_key:
         return "tavily", notices
-    if exa_key:
-        notices.append("已选择 Tavily 搜索，但当前未检测到 TAVILY_API_KEY，本次自动退回为 Exa。")
-        return "exa", notices
-    notices.append("当前没有 TAVILY_API_KEY，且无可回退的 Exa 引擎。")
+    notices.append("当前固定使用 Tavily 搜索，但未检测到 TAVILY_API_KEY。")
     return "", notices
 
 
@@ -850,6 +824,139 @@ def sort_results_by_recency(results):
         key=lambda item: item.get("published_at_resolved") or item.get("published_date") or "",
         reverse=True,
     )
+
+
+FOCUS_GATE_STOP_TERMS = {
+    "ai", "news", "latest", "today", "update", "company", "inc", "corp",
+    "report", "reported", "model", "release", "launch",
+}
+
+
+def _dedupe_focus_terms(values, limit=40):
+    terms = []
+    seen = set()
+    for value in values or []:
+        text = str(value or "").strip()
+        norm = _normalize_focus_term(text)
+        if not text or not norm or norm in seen or norm in FOCUS_GATE_STOP_TERMS:
+            continue
+        if len(norm) < 2:
+            continue
+        terms.append(text)
+        seen.add(norm)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _normalize_focus_term(text):
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(text or "").lower().strip())
+
+
+def _extract_focus_terms(topic, focus_pack=None):
+    focus_pack = focus_pack or {}
+    topic_terms = [topic, focus_pack.get("id", ""), focus_pack.get("display_name", ""), focus_pack.get("title", "")]
+    aliases = list(focus_pack.get("aliases", []) or [])
+    keywords = list(focus_pack.get("keywords", []) or [])
+    tags = list(focus_pack.get("tags", []) or [])
+    companies = list(focus_pack.get("companies", []) or [])
+    priority_terms = list(focus_pack.get("priority_terms", []) or [])
+
+    keyword_norms = {_normalize_focus_term(item) for item in keywords + tags + priority_terms}
+    primary_terms = list(topic_terms)
+    for alias in aliases:
+        alias_norm = _normalize_focus_term(alias)
+        if alias_norm and alias_norm not in keyword_norms:
+            primary_terms.append(alias)
+
+    secondary_terms = aliases + keywords + tags + companies + priority_terms
+    return (
+        _dedupe_focus_terms(primary_terms, limit=12),
+        _dedupe_focus_terms(secondary_terms, limit=36),
+    )
+
+
+def _focus_text_from_result(result):
+    return " ".join(
+        str(result.get(key, "") or "")
+        for key in ("title", "content", "url", "source", "published_date", "published_at_resolved")
+    )
+
+
+def _focus_text_from_item(item):
+    parts = []
+    for key in ("title", "summary", "event", "source", "url", "date_check", "date", "keywords"):
+        value = get_value(item, key, "")
+        if isinstance(value, (list, tuple, set)):
+            parts.extend(str(part or "") for part in value)
+        else:
+            parts.append(str(value or ""))
+    return " ".join(parts)
+
+
+def _matches_topic_focus(text, primary_terms, secondary_terms, secondary_min_hits=2):
+    normalized_text = _normalize_focus_term(text)
+    if not normalized_text:
+        return False
+
+    for term in primary_terms:
+        term_norm = _normalize_focus_term(term)
+        if term_norm and term_norm in normalized_text:
+            return True
+
+    hit_count = 0
+    seen_hits = set()
+    for term in secondary_terms:
+        term_norm = _normalize_focus_term(term)
+        if not term_norm or term_norm in seen_hits or term_norm in FOCUS_GATE_STOP_TERMS:
+            continue
+        if term_norm in normalized_text:
+            seen_hits.add(term_norm)
+            hit_count += 1
+            if hit_count >= secondary_min_hits:
+                return True
+
+    return False
+
+
+def filter_results_for_topic_focus(results, topic, focus_pack=None, min_keep=6, secondary_min_hits=2):
+    primary_terms, secondary_terms = _extract_focus_terms(topic, focus_pack)
+    if not primary_terms and not secondary_terms:
+        return list(results or []), 0
+
+    kept = [
+        result for result in (results or [])
+        if _matches_topic_focus(
+            _focus_text_from_result(result),
+            primary_terms,
+            secondary_terms,
+            secondary_min_hits=secondary_min_hits,
+        )
+    ]
+    dropped_count = max(0, len(results or []) - len(kept))
+    if len(kept) >= min_keep:
+        return kept, dropped_count
+    return list(results or []), 0
+
+
+def filter_generated_items_for_topic_focus(items, topic, focus_pack=None, min_keep=1, secondary_min_hits=2):
+    primary_terms, secondary_terms = _extract_focus_terms(topic, focus_pack)
+    if not primary_terms and not secondary_terms:
+        return list(items or []), 0
+
+    kept = [
+        item for item in (items or [])
+        if _matches_topic_focus(
+            _focus_text_from_item(item),
+            primary_terms,
+            secondary_terms,
+            secondary_min_hits=secondary_min_hits,
+        )
+    ]
+    dropped_count = max(0, len(items or []) - len(kept))
+    if len(kept) >= min_keep:
+        return kept, dropped_count
+    return list(items or []), 0
 
 
 
@@ -1064,6 +1171,15 @@ def collect_company_search_results(
     if rank_limit is None:
         rank_limit = 60 if company_pack.get("id") != "generic" else 48
     ranked_results = rank_results_by_company_pack(merged_results, company_pack, limit=rank_limit)
+    ranked_results, focus_dropped_count = filter_results_for_topic_focus(
+        ranked_results,
+        topic,
+        company_pack,
+        min_keep=6,
+        secondary_min_hits=2,
+    )
+    if focus_dropped_count:
+        print(f"🔎 Topic focus gate for {topic}: dropped {focus_dropped_count} cross-topic search results")
     return ranked_results, source_quality_stats, source_quality_warnings
 
 
@@ -1393,10 +1509,10 @@ with st.sidebar:
     jina_key = _get_runtime_secret("JINA_API_KEY", "")
     gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
     gist_id = _get_runtime_secret("GIST_ID", "")
-    if api_key and (tavily_key or exa_key):
+    if api_key and tavily_key:
         st.success("🔐 部门专属安全引擎已连接")
     else:
-        st.error("⚠️ 当前需配置可用的 DeepSeek 与搜索密钥，请检查 DEEPSEEK_API_KEY / TAVILY_API_KEY / EXA_API_KEY。")
+        st.error("⚠️ 当前固定使用 DeepSeek + Tavily，请检查 DEEPSEEK_API_KEY / TAVILY_API_KEY。")
 
     st.divider()
     model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
@@ -1411,12 +1527,9 @@ with st.sidebar:
     st.caption("当前模型链路固定使用 DeepSeek。Gemini Key 已暂不纳入本轮运行与排障范围。")
     time_opt = st.selectbox("回溯时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
     time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m"}
-    search_provider = st.selectbox(
-        "搜索引擎",
-        ["tavily", "hybrid", "exa"],
-        key="search_provider",
-        format_func=format_search_provider_option,
-    )
+    search_provider = "tavily"
+    st.session_state.search_provider = "tavily"
+    st.caption("搜索引擎固定使用 Tavily：advanced + news + 3 chunks。")
     enable_finance_chain = st.toggle("上市公司金融补链（更耗 token）", value=False)
 
     with st.expander("⚙️ 高级搜索源设置"):
@@ -1503,57 +1616,15 @@ with st.sidebar:
             "exclude_text": tavily_exclude_text,
         }
 
-        st.divider()
-        exa_preset_col1, exa_preset_col2 = st.columns(2)
-        with exa_preset_col1:
-            if st.button("恢复 Exa 默认", key="btn_exa_default"):
-                apply_exa_default_preset()
-        with exa_preset_col2:
-            if st.button("Exa 硬科技预设", key="btn_exa_hardtech"):
-                apply_exa_hardtech_preset()
-
-        st.caption("Exa 仍然保留为可选引擎：`auto + news + highlights`。只有切到 Exa 或混合搜索时，下列参数才生效。")
-        exa_search_type = st.selectbox(
-            "Exa 搜索类型",
-            ["auto", "fast", "instant", "deep"],
-            key="exa_search_type",
-        )
-        exa_category = st.selectbox(
-            "Exa 结果类别",
-            ["news", "", "financial report", "research paper", "personal site"],
-            key="exa_category",
-            format_func=lambda item: {
-                "news": "news（推荐）",
-                "": "自动/不强制",
-                "financial report": "financial report",
-                "research paper": "research paper",
-                "personal site": "personal site",
-            }.get(item, item),
-        )
-        exa_result_limit = st.number_input("Exa 每次查询结果数", min_value=3, max_value=20, step=1, key="exa_result_limit")
-        exa_content_mode = st.selectbox(
-            "Exa 搜索内容",
-            ["highlights", "highlights_text", "text"],
-            key="exa_content_mode",
-            format_func=lambda item: {
-                "highlights": "highlights（推荐，最稳）",
-                "highlights_text": "highlights + text（更全，但更贵）",
-                "text": "text（不推荐，容易太重）",
-            }.get(item, item),
-        )
-        exa_highlights_chars = st.slider("Exa highlights 最大字符数", min_value=800, max_value=4000, step=200, key="exa_highlights_chars")
-        exa_text_chars = st.slider("Exa text 最大字符数", min_value=1200, max_value=8000, step=400, key="exa_text_chars")
-        exa_include_text = st.text_input("Exa 必含关键词（可选，1-5词）", key="exa_include_text")
-        exa_exclude_text = st.text_input("Exa 排除关键词（可选，1-5词）", key="exa_exclude_text")
         exa_search_settings = {
-            "search_type": exa_search_type,
-            "category": exa_category,
-            "num_results": int(exa_result_limit),
-            "content_mode": exa_content_mode,
-            "highlights_max_characters": int(exa_highlights_chars),
-            "text_max_characters": int(exa_text_chars),
-            "include_text": exa_include_text,
-            "exclude_text": exa_exclude_text,
+            "search_type": DEFAULT_EXA_SEARCH_TYPE,
+            "category": DEFAULT_EXA_CATEGORY,
+            "num_results": DEFAULT_EXA_RESULT_LIMIT,
+            "content_mode": DEFAULT_EXA_CONTENT_MODE,
+            "highlights_max_characters": DEFAULT_EXA_HIGHLIGHTS_CHARS,
+            "text_max_characters": DEFAULT_EXA_TEXT_CHARS,
+            "include_text": DEFAULT_EXA_INCLUDE_TEXT,
+            "exclude_text": DEFAULT_EXA_EXCLUDE_TEXT,
         }
 
     file_name = st.text_input("导出文件名", f"FPC-RD科技资讯_{datetime.date.today()}")
@@ -1647,6 +1718,18 @@ if not st.session_state.report_ready:
                     )
                     event_blueprints = mem_manager.bind_event_blueprints(topic, event_blueprints, current_date_str)
                     timeline_events = generate_timeline(event_blueprints)
+                    topic_gate_warnings = []
+                    timeline_events, timeline_focus_dropped = filter_generated_items_for_topic_focus(
+                        timeline_events,
+                        topic,
+                        company_pack,
+                        min_keep=1,
+                        secondary_min_hits=2,
+                    )
+                    if timeline_focus_dropped:
+                        topic_gate_warnings.append(
+                            f"主题门禁已剔除 {timeline_focus_dropped} 条疑似跨专题时间线事件。"
+                        )
                     analysis_events, analysis_results = select_analysis_candidates(
                         event_blueprints,
                         raw_results,
@@ -1663,6 +1746,7 @@ if not st.session_state.report_ready:
                         list(crawl_result.get("warnings", []))
                         + list(source_quality_warnings)
                         + list(freshness_warnings)
+                        + topic_gate_warnings
                     )
                     past_memories = mem_manager.get_topic_context(topic, history_limit=3, event_limit=4)
                     final_news_list, new_insight = map_reduce_analysis(
@@ -1682,6 +1766,17 @@ if not st.session_state.report_ready:
                     deep_data_res = None
                     if final_news_list:
                         deduped_news = dedupe_news_items(final_news_list)
+                        deduped_news, news_focus_dropped = filter_generated_items_for_topic_focus(
+                            deduped_news,
+                            topic,
+                            company_pack,
+                            min_keep=1,
+                            secondary_min_hits=2,
+                        )
+                        if news_focus_dropped:
+                            crawl_result["warnings"].append(
+                                f"主题门禁已剔除 {news_focus_dropped} 条疑似跨专题深度新闻。"
+                            )
                         if deduped_news:
                             finance_data = {}
                             if enable_finance_chain:
@@ -1766,7 +1861,7 @@ if not st.session_state.report_ready:
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
         elif start_btn and not active_search_provider:
-            st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
+            st.error("当前固定使用 Tavily，请先配置 TAVILY_API_KEY。")
 
     with tab2:
         st.markdown(
@@ -1901,10 +1996,22 @@ if not st.session_state.report_ready:
                         topic_pack,
                         limit=30,
                     )
+                    top_results, focus_dropped_count = filter_results_for_topic_focus(
+                        top_results,
+                        topic_key,
+                        topic_pack,
+                        min_keep=8,
+                        secondary_min_hits=1,
+                    )
+                    topic_gate_warnings = []
+                    if focus_dropped_count:
+                        topic_gate_warnings.append(
+                            f"主题门禁已剔除 {focus_dropped_count} 条疑似跨专题搜索结果。"
+                        )
                     if not top_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic_label,
-                            warnings=freshness_warnings,
+                            warnings=list(freshness_warnings) + topic_gate_warnings,
                             freshness_stats=freshness_stats,
                             focus_tags=topic_pack.get("tags", []),
                         )
@@ -1923,6 +2030,17 @@ if not st.session_state.report_ready:
                     )
                     event_blueprints = mem_manager.bind_event_blueprints(topic_key, event_blueprints, current_date_str)
                     timeline_events = generate_timeline(event_blueprints)
+                    timeline_events, timeline_focus_dropped = filter_generated_items_for_topic_focus(
+                        timeline_events,
+                        topic_key,
+                        topic_pack,
+                        min_keep=1,
+                        secondary_min_hits=1,
+                    )
+                    if timeline_focus_dropped:
+                        topic_gate_warnings.append(
+                            f"主题门禁已剔除 {timeline_focus_dropped} 条疑似跨专题时间线事件。"
+                        )
                     analysis_events, analysis_results = select_analysis_candidates(
                         event_blueprints,
                         top_results,
@@ -1935,7 +2053,11 @@ if not st.session_state.report_ready:
                         jina_key=jina_key,
                         max_chars_per_source=MAX_SOURCE_CHARS_PER_URL,
                     )
-                    crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(freshness_warnings)
+                    crawl_result["warnings"] = (
+                        list(crawl_result.get("warnings", []))
+                        + list(freshness_warnings)
+                        + topic_gate_warnings
+                    )
                     past_memories = mem_manager.get_topic_context(topic_key, history_limit=3, event_limit=4)
                     final_news_list, new_insight = map_reduce_analysis(
                         ai,
@@ -1957,6 +2079,17 @@ if not st.session_state.report_ready:
                     deep_data_res = None
                     if final_news_list:
                         deduped_news = dedupe_news_items(final_news_list)
+                        deduped_news, news_focus_dropped = filter_generated_items_for_topic_focus(
+                            deduped_news,
+                            topic_key,
+                            topic_pack,
+                            min_keep=1,
+                            secondary_min_hits=1,
+                        )
+                        if news_focus_dropped:
+                            crawl_result["warnings"].append(
+                                f"主题门禁已剔除 {news_focus_dropped} 条疑似跨专题深度新闻。"
+                            )
                         if deduped_news:
                             deep_data_res = {
                                 "topic": topic_label,
@@ -2043,7 +2176,7 @@ if not st.session_state.report_ready:
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
         elif start_industry_btn and not active_search_provider:
-            st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
+            st.error("当前固定使用 Tavily，请先配置 TAVILY_API_KEY。")
 
         if start_cn_industry_btn and active_search_provider:
             all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(
@@ -2059,7 +2192,7 @@ if not st.session_state.report_ready:
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
         elif start_cn_industry_btn and not active_search_provider:
-            st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
+            st.error("当前固定使用 Tavily，请先配置 TAVILY_API_KEY。")
 
 else:
     if not st.session_state.report_celebrated:

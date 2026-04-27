@@ -2,82 +2,69 @@
 
 ## 1. 当前目标
 
-当前目标已经收敛为一件事：先把 `24h` 日报恢复到稳定状态，暂停周报功能推进，并且只对“核心时间线新闻太短”做最小修正。
+恢复日报主链稳定性：固定 Tavily 搜索与 DeepSeek 生成，修复信息跨章节乱窜，并修复 PPT 主图/封面与本次报告不匹配的问题。
 
 ## 2. 已完成内容
 
-- 已确认本轮应优先处理的是日报失稳，而不是继续做周报细化。
-- 已把下列文件回退到更稳定的基线行为：
-  - `agents/deep_analyst.py`
-  - `tools/report_linker.py`
-  - `tools/export_word.py`
-- 已在 `agent_app.py` 中撤回本轮新增的日报/周报/观察模式分流，恢复为固定的日报入口：
-  - 不再显示“报告模式”；
-  - 不再按周报/观察模式动态放大搜索、蓝图和抓取配额；
-  - 不再对候选结果做额外的补位扩张；
-  - 宏观行业频道按钮恢复为固定的日报文案。
-- 已撤回会扰乱日报章节边界的动态分支：
-  - `report_scope` 元数据写入；
-  - 周报专题总结预览；
-  - 额外补长文候选的支持度逻辑。
-- 已在 `agents/timeline_agent.py` 中保留唯一的谨慎修改：
-  - 核心时间线短新闻从过短的“名词短语”收敛为更完整的一句话短讯；
-  - 标题压缩长度略放宽，但没有扩大搜索窗口、候选规模或跨章节补线。
-- 已完成本地静态验证：
-  - `python -m py_compile agent_app.py agents\timeline_agent.py agents\deep_analyst.py tools\report_linker.py tools\export_word.py tools\export_ppt.py tools\company_query_packs.py tools\intelligence_packs.py`
-  - 结果：通过。
+- 已确认跨章节乱窜的主要风险点在上游搜索结果和模型成稿输入，不在 `tools/report_linker.py` 的跨 topic 匹配；链接器当前只会连接相同 topic 的时间线和长新闻。
+- 已在 `agent_app.py` 增加专题门禁：
+  - 搜索结果进入事件主档前做 topic focus 过滤；
+  - 核心时间线生成后做 topic focus 过滤；
+  - 深度新闻生成并去重后做 topic focus 过滤；
+  - 公司流门禁更严格，行业流门禁更宽。
+- 已在 `tools/export_ppt.py` 修复模板旧页问题：
+  - 加载 `template.pptx` 后删除模板内已有幻灯片；
+  - 保留模板母版和布局；
+  - 再生成本次日报封面、时间线页、金融页和深度新闻页。
+- 已执行源仓库语法检查，关键文件通过。
+- 已执行 PPT 烟测，生成文件第一张幻灯片为《FPC-RD 科技资讯》，不再被旧模板页抢占。
 
 ## 3. 未完成内容
 
-- 尚未在本地运行副本用真实 key 重新跑一次日报。
-- 尚未重新生成并检查新的 PPT，确认 `C:\Users\zwz10\Downloads\FPC-RD科技资讯_2026-04-23 (2).pptx` 中那类“Google 信息跨章节乱窜”的现象是否已消失。
-- 尚未确认核心时间线在真实数据下是否已经达到“仍然短讯化，但不再过短”的目标。
+- 尚未完成真实 Tavily + DeepSeek 端到端日报跑数。
+- 阻塞真实跑数的原因：本地运行副本当前缺少实际 `.streamlit/secrets.toml`，当前 shell 环境也未检测到 `TAVILY_API_KEY` / `DEEPSEEK_API_KEY`。
 
 ## 4. 关键决定
 
-- 当前明确暂停周报，不再继续推进“周报独立化”。
-- 当前不再继续扩大时间线条数、候选池、反向补线或规则补位。
-- 当前只保留一个最小修改方向：把核心时间线短新闻写得稍微完整一点。
-- 当前保留的非本次问题修复包括：
-  - `tools/company_query_packs.py` / `tools/intelligence_packs.py` 中已做的硬件化、本地化 query pack 强化；
-  - `tools/export_ppt.py` 中已经完成的 K 线图缩小。
-- 当前模型链路继续按 DeepSeek 处理，Gemini 不作为本轮回退对象。
+- 当前不继续推进周报。
+- 当前不整仓回退。
+- 当前不恢复 Exa / Hybrid fallback。
+- 串章先用轻量门禁控制，不引入额外 LLM 分类，以避免明显增加 token 成本。
+- PPT 修复选择“清空模板旧页但保留母版布局”，而不是完全弃用模板。
 
 ## 5. 风险/禁区
 
-- 当前仓库是脏工作树，不要直接做全仓硬回退。
-- 不要继续把周报逻辑重新接回 `agent_app.py`，至少在日报重新实跑确认稳定前不要这样做。
-- 不要重新打开 `tools/report_linker.py` 的反向补线逻辑，否则很容易再次把专题边界搅乱。
-- 不要重新加回 `select_analysis_candidates()` 的额外补位逻辑，否则日报章节很可能再次变得发散。
-- `tools/export_ppt.py` 里仍残留部分长周期渲染辅助代码，但当前日报链路不会给它对应元数据；若后续再次做周报，应重新评估，而不是直接恢复旧接线。
+- 不要声称已经完成真实日报端到端验证，除非密钥恢复后实际跑过。
+- 不要把模板旧页重新保留在生成 PPT 前面，否则主图不匹配会复发。
+- 不要把门禁改成过强的硬过滤，否则核心时间线可能再次变得过短。
+- 不要重新接回周报入口、周报标题或主题总结页。
+- 不要提交真实密钥、临时 PPT/Word、日志或缓存。
 
 ## 6. 相关文件
 
 - `agent_app.py`
-- `agents/timeline_agent.py`
-- `agents/deep_analyst.py`
-- `tools/report_linker.py`
-- `tools/export_word.py`
 - `tools/export_ppt.py`
+- `tools/report_linker.py`
+- `tools/company_query_packs.py`
+- `tools/intelligence_packs.py`
 - `PLANS.md`
 - `HANDOFF.md`
 
 ## 7. 验证方式
 
-- 启动验证：在本地运行副本执行 `python -m streamlit run agent_app.py`，或使用 `run_local.ps1`。
-- 日报验证：至少跑一次 `Google` 或 `Nvidia \ Google` 的日报，确认专题不再跨章节混入。
-- 时间线验证：重点看核心时间线短新闻是否比之前更完整，但仍保持短讯风格。
-- 导出验证：重新生成 PPT，检查是否还会出现同一家公司新闻散落到不同章节的问题。
+- 已完成：
+  - `python -m py_compile agent_app.py tools\export_ppt.py tools\report_linker.py agents\deep_analyst.py`
+  - PPT 烟测确认第一张幻灯片文本为《FPC-RD 科技资讯》。
+  - 已同步到 `E:\Users\zwz10\PycharmProjects\collectNewslocal`，四个关键文件哈希一致。
+  - 已在本地运行副本执行 `py_compile`，关键文件通过。
+  - 已在本地运行副本执行 Streamlit `AppTest`，无异常；页面 selectbox 为核心模型、回溯时间线、Tavily 搜索深度、Tavily 结果主题、Tavily 原文片段模式。
+  - 已在本地运行副本执行 PPT 烟测，第一张幻灯片为《FPC-RD 科技资讯》。
+- 待完成：
+  - 密钥恢复后运行一次 `Google \ Nvidia` 或 `Nvidia \ Google` 日报；
+  - 下载 PPT 检查：Google/Nvidia 信息不跨章节乱窜，主图/封面与本次报告匹配，K 线图不压文字。
 
 ## 8. 下一步建议
 
-1. 先把当前修改同步到 `E:\Users\zwz10\PycharmProjects\collectNewslocal`。
-2. 用真实 key 跑一次日报，不要先跑周报。
-3. 优先检查 `Google` 和 `Nvidia` 两个专题：
-   - Google 是否还会在不同章节乱窜；
-   - Nvidia 的核心时间线是否仍然只有极短标题。
-4. 如果时间线仍偏短，下一步只继续微调 `agents/timeline_agent.py`：
-   - 标题长度区间；
-   - 标题清洗和截断长度；
-   - 短讯表达要求。
-5. 在日报重新稳定前，不要再碰周报接线、反向补线和候选扩张。
+1. 恢复 `collectNewslocal\.streamlit\secrets.toml` 后跑一次双公司日报。
+2. 下载 PPT 后先看 Google/Nvidia 是否仍跨章节串章，再看封面/主图是否仍被旧模板影响。
+3. 如果仍有串章，优先检查被保留的 Tavily 原始结果标题和摘要，而不是先改 DeepSeek prompt。
