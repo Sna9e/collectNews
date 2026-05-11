@@ -1,0 +1,11 @@
+streamlit
+openai
+pydantic
+python-docx
+python-pptx
+langchain-text-splitters
+yfinance
+mplfinance
+pandas
+matplotlib
+requests
