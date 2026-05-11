@@ -24,6 +24,8 @@ from tools.company_query_packs import (
 )
 from tools.intelligence_packs import (
     build_focus_hint,
+    get_consumer_electronics_sites_text,
+    get_consumer_electronics_topics,
     get_default_china_sites_text,
     get_default_sites_text,
     get_industry_topics,
@@ -1262,7 +1264,11 @@ with st.sidebar:
 st.title("🧠 商业情报战情室（事件主档统一版）")
 
 if not st.session_state.report_ready:
-    tab1, tab2 = st.tabs(["📚 频道一：公司追踪（带金融量化）", "🌐 频道二：每日宏观行业早报（全域扫描）"])
+    tab1, tab2, tab3 = st.tabs([
+        "📚 频道一：公司追踪（带金融量化）",
+        "🌐 频道二：每日宏观行业早报（全域扫描）",
+        "📱 频道三：科技消费电子日报",
+    ])
 
     with tab1:
         st.markdown("💡 **操作指南**：输入追踪对象，多个目标请使用 `\\` 分开，系统会并发执行独立分析。")
@@ -1488,18 +1494,39 @@ if not st.session_state.report_ready:
         industry_topics = get_industry_topics()
         active_search_provider, search_notices = resolve_search_provider(search_provider, tavily_key, exa_key)
 
-        def run_industry_pipeline(industry_topic_list, domain_text, china_mode=False, query_suffix=""):
-            ai, light_ai, ai_notices = build_ai_stack(
-                api_key,
-                model_id,
-                use_gemini_light=use_gemini_light,
-                gemini_key=gemini_key,
-                gemini_model=gemini_light_model,
-                use_gemini_main=use_gemini_main,
-                gemini_main_model=gemini_main_model,
-            )
+        def run_industry_pipeline(
+            industry_topic_list,
+            domain_text,
+            china_mode=False,
+            query_suffix="",
+            search_provider_override=None,
+            exa_settings_override=None,
+            force_deepseek=False,
+            status_label="",
+        ):
+            resolved_search_provider = search_provider_override or active_search_provider
+            resolved_search_settings = exa_settings_override or exa_search_settings
+            effective_search_notices = [] if search_provider_override else list(search_notices or [])
+
+            if force_deepseek:
+                ai = AI_Driver(api_key, model_id, provider="deepseek")
+                light_ai = ai
+                ai_notices = ["本频道固定使用 DeepSeek 生成，不启用 Gemini 主模型或轻任务模型。"]
+            else:
+                ai, light_ai, ai_notices = build_ai_stack(
+                    api_key,
+                    model_id,
+                    use_gemini_light=use_gemini_light,
+                    gemini_key=gemini_key,
+                    gemini_model=gemini_light_model,
+                    use_gemini_main=use_gemini_main,
+                    gemini_main_model=gemini_main_model,
+                )
             if not ai.valid:
-                st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
+                if force_deepseek:
+                    st.error("当前没有可用的 DeepSeek 密钥。频道三固定使用 DEEPSEEK_API_KEY。")
+                else:
+                    st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
                 return [], [], "未启用模型", {}
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
@@ -1507,14 +1534,16 @@ if not st.session_state.report_ready:
             mem_manager.load_memory()
             reset_search_diagnostics()
 
-            if china_mode:
+            if status_label:
+                st.info(status_label)
+            elif china_mode:
                 st.info("🔎 正在启动中国专题并发引擎，仅保留中文网站与中国公司事件。")
             else:
                 st.info("🔎 正在启动全域多路扫描并发引擎，请稍候。")
             for notice in ai_notices:
                 st.caption(notice)
-            st.caption(f"本次搜索引擎：{format_search_provider_label(active_search_provider)}")
-            for notice in search_notices:
+            st.caption(f"本次搜索引擎：{format_search_provider_label(resolved_search_provider)}")
+            for notice in effective_search_notices:
                 st.caption(notice)
 
             def process_industry_task(topic_pack, index):
@@ -1534,9 +1563,9 @@ if not st.session_state.report_ready:
                             time_limit_dict[time_opt],
                             max_results=16,
                             tavily_key=tavily_key,
-                            provider=active_search_provider,
+                            provider=resolved_search_provider,
                             exa_key=exa_key,
-                            exa_settings=exa_search_settings,
+                            exa_settings=resolved_search_settings,
                         )
                         if china_mode:
                             results = filter_china_results(results, effective_domains, require_chinese_text=True)
@@ -1674,9 +1703,9 @@ if not st.session_state.report_ready:
                 all_timeline_data,
                 format_model_stack_name(ai, light_ai),
                 build_run_metadata(
-                    requested_provider=search_provider,
-                    resolved_provider=active_search_provider,
-                    notices=search_notices,
+                    requested_provider=search_provider_override or search_provider,
+                    resolved_provider=resolved_search_provider,
+                    notices=effective_search_notices,
                     diagnostics=get_search_diagnostics(),
                 ),
             )
@@ -1711,6 +1740,48 @@ if not st.session_state.report_ready:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
         elif start_cn_industry_btn and not active_search_provider:
             st.error("当前没有可用的搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
+
+    with tab3:
+        st.markdown(
+            "💡 **本频道面向 FPC 制造商研发部门**：默认使用 Tavily 搜索与 DeepSeek 生成，"
+            "重点跟踪消费电子、AR/VR/AI眼镜、AI、电动汽车、折叠屏与新型显示，并提高中国国内新闻权重。"
+        )
+        consumer_topics = get_consumer_electronics_topics()
+        consumer_sites = st.text_area(
+            "消费电子重点搜索源（中国站点优先，同时保留海外产品站点）",
+            get_consumer_electronics_sites_text(),
+            height=220,
+            key="consumer_sites_whitelist",
+        )
+        consumer_query_suffix = st.text_input(
+            "消费电子日报国内权重关键词（自动拼接到每条查询）",
+            "中国 国内 国产 供应链 量产 参数 新品 发布 硬件 制造 政策 并购 收购",
+            key="consumer_query_suffix",
+        )
+        start_consumer_btn = st.button("📱 一键生成《科技消费电子日报》", type="primary", key="btn_consumer_daily")
+
+        consumer_search_settings = dict(exa_search_settings)
+        consumer_search_settings["include_text"] = "硬件 供应链 新品 参数 中国"
+        consumer_search_settings["exclude_text"] = "lawsuit court copyright security privacy"
+
+        if start_consumer_btn and tavily_key:
+            all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(
+                consumer_topics,
+                consumer_sites,
+                china_mode=False,
+                query_suffix=consumer_query_suffix,
+                search_provider_override="tavily",
+                exa_settings_override=consumer_search_settings,
+                force_deepseek=True,
+                status_label="🔎 正在启动科技消费电子日报：Tavily 默认搜索，DeepSeek 独立成稿，国内新闻与供应链权重更高。",
+            )
+            if all_deep_data or all_timeline_data:
+                store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name, run_metadata=search_runtime)
+                st.rerun()
+            else:
+                st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
+        elif start_consumer_btn and not tavily_key:
+            st.error("频道三默认使用 Tavily。请配置 TAVILY_API_KEY 后再生成消费电子日报。")
 
 else:
     if not st.session_state.report_celebrated:
