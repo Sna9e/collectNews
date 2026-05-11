@@ -40,6 +40,7 @@ from tools.search_engine import (
     merge_sites_text,
     reset_search_diagnostics,
     safe_run_async_crawler,
+    search_consumer_daily_tavily,
     search_web,
 )
 
@@ -105,6 +106,9 @@ EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY = 16
 ANALYSIS_EVENT_LIMIT = 8
 COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
+CONSUMER_DAILY_EVENT_INPUT_LIMIT = 24
+CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT = 10
+CONSUMER_DAILY_CRAWL_URL_LIMIT = 10
 MAX_SOURCE_CHARS_PER_URL = 2400
 DEFAULT_GEMINI_LIGHT_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_GEMINI_MAIN_MODEL = "gemini-2.5-flash-lite"
@@ -867,8 +871,12 @@ def build_error_section_payload(topic, error_text, freshness_stats=None, focus_t
 
 
 
-def store_report_outputs(all_deep_data, all_timeline_data, export_name, model_name, run_metadata=None):
-    linked_deep_data, linked_timeline_data = annotate_report_data(all_deep_data, all_timeline_data)
+def store_report_outputs(all_deep_data, all_timeline_data, export_name, model_name, run_metadata=None, link_reports=True):
+    if link_reports:
+        linked_deep_data, linked_timeline_data = annotate_report_data(all_deep_data, all_timeline_data)
+    else:
+        linked_deep_data = all_deep_data
+        linked_timeline_data = all_timeline_data
     st.session_state.report_data = linked_deep_data
     st.session_state.timeline_data = linked_timeline_data
     st.session_state.run_metadata = dict(run_metadata or {})
@@ -1760,23 +1768,183 @@ if not st.session_state.report_ready:
         )
         start_consumer_btn = st.button("📱 一键生成《科技消费电子日报》", type="primary", key="btn_consumer_daily")
 
-        consumer_search_settings = dict(exa_search_settings)
-        consumer_search_settings["include_text"] = "硬件 供应链 新品 参数 中国"
-        consumer_search_settings["exclude_text"] = "lawsuit court copyright security privacy"
+        def run_consumer_daily_pipeline(consumer_topic_list, domain_text, query_suffix=""):
+            ai = AI_Driver(api_key, model_id, provider="deepseek")
+            if not ai.valid:
+                st.error("当前没有可用的 DeepSeek 密钥。频道三固定使用 DEEPSEEK_API_KEY。")
+                return [], [], "未启用模型", {}
+
+            current_dt = datetime.datetime.now(LOCAL_TZ)
+            current_date_str = current_dt.strftime("%Y年%m月%d日")
+            reset_search_diagnostics()
+            st.info("🔎 正在启动消费电子日报专用搜索：Tavily 多查询扩展，国内科技新闻、产品参数和供应链权重优先。")
+            st.caption("本频道为宽松日报模式：不因缺少标准时间戳直接剔除结果，优先按每日重要度、中文站点、中国公司和硬件/供应链相关性排序。")
+            st.caption("本频道固定使用 DeepSeek 生成，不启用 Gemini 主模型或轻任务模型。")
+            st.caption("本次搜索引擎：Tavily（消费电子日报专用）")
+
+            def process_consumer_daily_task(topic_pack, index):
+                topic_label = topic_pack.get("title", "未命名专题")
+                freshness_stats = {}
+                try:
+                    topic_key = topic_label
+                    raw_results = search_consumer_daily_tavily(
+                        topic_pack,
+                        domain_text,
+                        time_limit_dict[time_opt],
+                        tavily_key=tavily_key,
+                        query_suffix=query_suffix,
+                        max_results_per_query=14,
+                        max_queries=6,
+                        broad_query_count=2,
+                    )
+                    top_results = list(raw_results or [])[:42]
+                    freshness_stats = {
+                        "enabled": False,
+                        "input_count": len(raw_results or []),
+                        "kept_count": len(top_results),
+                        "window_label": "消费电子日报宽松模式：保留近期重要新闻，不按缺失时间戳硬剔除",
+                        "anchor_time": current_dt.isoformat(),
+                    }
+
+                    if not top_results:
+                        deep_empty, timeline_empty = build_empty_section_payload(
+                            topic_label,
+                            warnings=[],
+                            freshness_stats=freshness_stats,
+                            focus_tags=topic_pack.get("tags", []),
+                        )
+                        return index, deep_empty, timeline_empty
+
+                    focus_hint = build_focus_hint(topic_pack, china_mode=False)
+                    daily_guidance = (
+                        f"{focus_hint}；宽松日报模式：目标是每日科技资讯的广度和重要度，不是严格法律/安全审查。"
+                        "同等重要度下，中国国内新闻、中文科技媒体、中国公司、国产供应链、产品参数、硬件升级、量产与订单优先。"
+                        "海外新闻只保留确有产品、AI、智能汽车、供应链或新型显示参考价值的重要事件。"
+                        "法律、版权、隐私、安全漏洞类新闻默认降权，除非直接影响硬件量产、供应链准入或产业政策。"
+                        "时间线需要尽量覆盖多条真实新闻，不要把不同公司、不同产品或不同赛道过度合并成一个泛泛趋势。"
+                    )
+                    event_blueprints = build_event_blueprints(
+                        ai,
+                        top_results[:CONSUMER_DAILY_EVENT_INPUT_LIMIT],
+                        topic_key,
+                        current_date_str,
+                        time_opt,
+                        history_hint="",
+                        guidance=daily_guidance,
+                    )
+                    timeline_events = generate_timeline(event_blueprints)
+                    analysis_events, analysis_results = select_analysis_candidates(
+                        event_blueprints,
+                        top_results,
+                        max_events=CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT,
+                        max_urls=CONSUMER_DAILY_CRAWL_URL_LIMIT,
+                    )
+                    if not analysis_results:
+                        analysis_results = top_results[:CONSUMER_DAILY_CRAWL_URL_LIMIT]
+
+                    crawl_result = collect_source_material(
+                        analysis_results,
+                        max_urls=CONSUMER_DAILY_CRAWL_URL_LIMIT,
+                        jina_key=jina_key,
+                        max_chars_per_source=MAX_SOURCE_CHARS_PER_URL,
+                    )
+                    final_news_list, _ = map_reduce_analysis(
+                        ai,
+                        topic_key,
+                        crawl_result["content"],
+                        current_date_str,
+                        time_opt,
+                        "",
+                        event_blueprints=analysis_events,
+                        source_mode=crawl_result["source_mode"],
+                        guidance=(
+                            f"{daily_guidance}；本频道是每日消费电子日报，每个专题尽量保留 4 到 5 条不同的重要新闻。"
+                            "【事件核心】必须多截取事件完整链条：谁、什么产品/业务、发生了什么、参数或数据是什么、国内外市场/供应链为什么重要。"
+                            "不要输出时间线匹配原因、事件判重说明或“共享事件ID”之类内部处理文字。"
+                        ),
+                        raw_search_results=analysis_results,
+                        map_ai_driver=ai,
+                    )
+
+                    deep_data_res = None
+                    if final_news_list:
+                        deduped_news = dedupe_news_items(final_news_list)
+                        if deduped_news:
+                            deep_data_res = {
+                                "topic": topic_label,
+                                "data": deduped_news,
+                                "source_mode": crawl_result["source_mode"],
+                                "crawler_valid_count": crawl_result["valid_count"],
+                                "warnings": list(crawl_result.get("warnings", [])),
+                                "extraction_stats": crawl_result.get("stats", {}),
+                                "freshness_stats": freshness_stats,
+                                "focus_tags": topic_pack.get("tags", []),
+                                "watch_entities": topic_pack.get("companies", []),
+                            }
+
+                    timeline_data_res = {
+                        "topic": topic_label,
+                        "events": timeline_events,
+                        "warnings": list(crawl_result.get("warnings", [])),
+                        "extraction_stats": crawl_result.get("stats", {}),
+                        "freshness_stats": freshness_stats,
+                        "focus_tags": topic_pack.get("tags", []),
+                    } if timeline_events else None
+                    return index, deep_data_res, timeline_data_res
+                except Exception as e:
+                    trace_text = traceback.format_exc(limit=8)
+                    print(f"⚠️ Consumer daily pipeline failed for {topic_label}: {trace_text}")
+                    deep_error, timeline_error = build_error_section_payload(
+                        topic_label,
+                        f"{e.__class__.__name__}: {e}",
+                        freshness_stats=freshness_stats,
+                        focus_tags=topic_pack.get("tags", []),
+                    )
+                    return index, deep_error, timeline_error
+
+            results = []
+            with st.spinner("🛰️ 消费电子日报探针已发射，正在聚合国内外重点科技新闻..."):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    futures = [
+                        executor.submit(process_consumer_daily_task, topic_pack, i)
+                        for i, topic_pack in enumerate(consumer_topic_list)
+                    ]
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            item = future.result()
+                            if item:
+                                results.append(item)
+                        except Exception as e:
+                            print(f"⚠️ Consumer daily worker crashed: {e}")
+
+            results.sort(key=lambda item: item[0])
+            all_deep_data = [item[1] for item in results if item[1] is not None]
+            all_timeline_data = [item[2] for item in results if item[2] is not None]
+            runtime = build_run_metadata(
+                requested_provider="tavily",
+                resolved_provider="tavily",
+                notices=[],
+                diagnostics=get_search_diagnostics(),
+            )
+            runtime["mode"] = "consumer_daily_relaxed"
+            runtime["strict_freshness_audit"] = False
+            return all_deep_data, all_timeline_data, ai.label, runtime
 
         if start_consumer_btn and tavily_key:
-            all_deep_data, all_timeline_data, active_model_name, search_runtime = run_industry_pipeline(
+            all_deep_data, all_timeline_data, active_model_name, search_runtime = run_consumer_daily_pipeline(
                 consumer_topics,
                 consumer_sites,
-                china_mode=False,
                 query_suffix=consumer_query_suffix,
-                search_provider_override="tavily",
-                exa_settings_override=consumer_search_settings,
-                force_deepseek=True,
-                status_label="🔎 正在启动科技消费电子日报：Tavily 默认搜索，DeepSeek 独立成稿，国内新闻与供应链权重更高。",
             )
             if all_deep_data or all_timeline_data:
-                store_report_outputs(all_deep_data, all_timeline_data, file_name, active_model_name, run_metadata=search_runtime)
+                store_report_outputs(
+                    all_deep_data,
+                    all_timeline_data,
+                    file_name,
+                    active_model_name,
+                    run_metadata=search_runtime,
+                    link_reports=False,
+                )
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
