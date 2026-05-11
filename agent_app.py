@@ -111,6 +111,7 @@ INDUSTRY_CRAWL_URL_LIMIT = 8
 CONSUMER_DAILY_EVENT_INPUT_LIMIT = 32
 CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT = 12
 CONSUMER_DAILY_CRAWL_URL_LIMIT = 14
+CONSUMER_DAILY_SOURCE_RESULT_LIMIT = 28
 CONSUMER_DAILY_MIN_NEWS_PER_TOPIC = 6
 CONSUMER_DAILY_MAX_NEWS_PER_TOPIC = 8
 MAX_SOURCE_CHARS_PER_URL = 2400
@@ -863,6 +864,90 @@ def collect_source_material(raw_results, max_urls, jina_key, max_chars_per_sourc
                 "全文抓取为空，本专题已退回到“搜索摘要分析”模式；当前结果适合看事件脉络，不适合过度解读原文级细节。"
             ]
     return crawl_result
+
+
+def _line_matches_topic_terms(line, topic_pack):
+    if not topic_pack:
+        return True
+    terms = list(topic_pack.get("required_terms", []) or []) + list(topic_pack.get("keywords", []) or []) + list(topic_pack.get("companies", []) or [])
+    if not terms:
+        return True
+    lower = str(line or "").lower()
+    for term in terms:
+        token = str(term or "").strip()
+        if token and token.lower() in lower:
+            return True
+    return False
+
+
+def _clean_consumer_daily_snippet(text, max_chars=900, topic_pack=None):
+    raw_lines = str(text or "").replace("\r", "\n").splitlines()
+    cleaned_lines = []
+    topic_lines = []
+    skipped_date_lines = 0
+    for line in raw_lines:
+        cleaned = re.sub(r"\s+", " ", line).strip()
+        if not cleaned:
+            continue
+        lower = cleaned.lower()
+        if any(
+            marker in lower
+            for marker in (
+                "share", "subscribe", "newsletter", "privacy policy", "terms of service",
+                "相关推荐", "相关阅读", "热门推荐", "本网页已闲置", "点击空白处",
+            )
+        ):
+            continue
+        if len(re.findall(r"20\d{2}[-年/]\d{1,2}[-月/]\d{1,2}", cleaned)) >= 2:
+            skipped_date_lines += 1
+            if skipped_date_lines >= 1:
+                continue
+        cleaned_lines.append(cleaned)
+        if _line_matches_topic_terms(cleaned, topic_pack):
+            topic_lines.append(cleaned)
+
+    selected_lines = topic_lines if topic_lines else cleaned_lines
+    text_out = " ".join(selected_lines) if selected_lines else re.sub(r"\s+", " ", str(text or "")).strip()
+    text_out = re.sub(r"补充判断：围绕[^。]{0,100}。?", "", text_out).strip()
+    if len(text_out) <= max_chars:
+        return text_out
+    return text_out[:max_chars].rstrip(" ，,;；。") + "。"
+
+
+def collect_consumer_daily_material(raw_results, max_items=CONSUMER_DAILY_SOURCE_RESULT_LIMIT, topic_pack=None):
+    blocks = []
+    for index, item in enumerate((raw_results or [])[:max_items], start=1):
+        title = str(item.get("title", "") or "").strip()
+        if not title:
+            continue
+        published = item.get("published_at_resolved") or item.get("published_date") or item.get("published") or ""
+        source = item.get("source", "") or ""
+        url = item.get("url", "") or ""
+        snippet = _clean_consumer_daily_snippet(item.get("content", ""), max_chars=900, topic_pack=topic_pack)
+        blocks.append(
+            "\n".join(
+                [
+                    f"【当日搜索卡片 {index}】",
+                    f"发布时间：{published}",
+                    f"来源：{source}",
+                    f"标题：{title}",
+                    f"摘要：{snippet}",
+                    f"链接：{url}",
+                ]
+            )
+        )
+
+    return {
+        "content": "\n\n".join(blocks),
+        "source_mode": "consumer_daily_digest",
+        "valid_count": len(blocks),
+        "warnings": [],
+        "stats": {
+            "jina_count": 0,
+            "direct_html_count": 0,
+            "snippet_count": len(blocks),
+        },
+    }
 
 
 
@@ -1684,9 +1769,15 @@ if not st.session_state.report_ready:
                     if final_news_list:
                         deduped_news = dedupe_news_items(final_news_list)
                         if deduped_news:
+                            for news_item in deduped_news:
+                                if isinstance(news_item, dict):
+                                    news_item["event_id"] = ""
+                                elif hasattr(news_item, "event_id"):
+                                    news_item.event_id = ""
                             deep_data_res = {
                                 "topic": topic_label,
                                 "data": deduped_news,
+                                "report_style": "consumer_daily",
                                 "source_mode": crawl_result["source_mode"],
                                 "crawler_valid_count": crawl_result["valid_count"],
                                 "warnings": list(crawl_result.get("warnings", [])),
@@ -1827,8 +1918,9 @@ if not st.session_state.report_ready:
                         tavily_key=tavily_key,
                         query_suffix=query_suffix,
                         max_results_per_query=16,
-                        max_queries=8,
-                        broad_query_count=3,
+                        max_queries=10,
+                        broad_query_count=4,
+                        target_date=current_dt.date(),
                     )
                     daily_results, freshness_stats, freshness_warnings = filter_results_to_local_day(
                         raw_results,
@@ -1868,20 +1960,12 @@ if not st.session_state.report_ready:
                         guidance=daily_guidance,
                     )
                     timeline_events = generate_timeline(event_blueprints)
-                    analysis_events, analysis_results = select_analysis_candidates(
-                        event_blueprints,
-                        top_results,
-                        max_events=CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT,
-                        max_urls=CONSUMER_DAILY_CRAWL_URL_LIMIT,
-                    )
-                    if not analysis_results:
-                        analysis_results = top_results[:CONSUMER_DAILY_CRAWL_URL_LIMIT]
-
-                    crawl_result = collect_source_material(
+                    analysis_events = _serialize_event_blueprints(event_blueprints)[:CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT]
+                    analysis_results = top_results[:CONSUMER_DAILY_SOURCE_RESULT_LIMIT]
+                    crawl_result = collect_consumer_daily_material(
                         analysis_results,
-                        max_urls=CONSUMER_DAILY_CRAWL_URL_LIMIT,
-                        jina_key=jina_key,
-                        max_chars_per_source=MAX_SOURCE_CHARS_PER_URL,
+                        max_items=CONSUMER_DAILY_SOURCE_RESULT_LIMIT,
+                        topic_pack=topic_pack,
                     )
                     final_news_list, _ = map_reduce_analysis(
                         ai,
@@ -1895,6 +1979,7 @@ if not st.session_state.report_ready:
                         guidance=(
                             f"{daily_guidance}；本频道是每日消费电子日报，每个专题尽量保留 {CONSUMER_DAILY_MIN_NEWS_PER_TOPIC} 到 {CONSUMER_DAILY_MAX_NEWS_PER_TOPIC} 条不同的重要新闻。"
                             "【事件核心】必须多截取事件完整链条：谁、什么产品/业务、发生了什么、参数或数据是什么、国内外市场/供应链为什么重要。"
+                            "【深度细节/数据支撑】必须优先写硬件参数、产品规格、销量/份额/价格、供应链环节、量产/订单/渠道等信息。"
                             f"严禁输出早于 {current_date_iso} 的旧新闻；不要输出时间线匹配原因、事件判重说明或“共享事件ID”之类内部处理文字。"
                         ),
                         raw_search_results=analysis_results,
