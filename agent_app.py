@@ -35,6 +35,7 @@ from tools.memory_manager import GistMemoryManager
 from tools.report_linker import annotate_report_data
 from tools.search_engine import (
     audit_recent_news_results,
+    filter_results_to_local_day,
     filter_china_results,
     get_search_diagnostics,
     merge_sites_text,
@@ -42,6 +43,7 @@ from tools.search_engine import (
     safe_run_async_crawler,
     search_consumer_daily_tavily,
     search_web,
+    text_mentions_local_day,
 )
 
 _LOCAL_SECRET_CACHE = None
@@ -106,9 +108,11 @@ EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY = 16
 ANALYSIS_EVENT_LIMIT = 8
 COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
-CONSUMER_DAILY_EVENT_INPUT_LIMIT = 24
-CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT = 10
-CONSUMER_DAILY_CRAWL_URL_LIMIT = 10
+CONSUMER_DAILY_EVENT_INPUT_LIMIT = 32
+CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT = 12
+CONSUMER_DAILY_CRAWL_URL_LIMIT = 14
+CONSUMER_DAILY_MIN_NEWS_PER_TOPIC = 6
+CONSUMER_DAILY_MAX_NEWS_PER_TOPIC = 8
 MAX_SOURCE_CHARS_PER_URL = 2400
 DEFAULT_GEMINI_LIGHT_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_GEMINI_MAIN_MODEL = "gemini-2.5-flash-lite"
@@ -609,6 +613,34 @@ def dedupe_news_items(news_items):
             seen_urls.add(url)
         seen_title_keys.append(title_key)
     return deduped_news
+
+
+def keep_news_items_for_local_day(news_items, source_results, target_date):
+    target = target_date.date() if isinstance(target_date, datetime.datetime) else target_date
+    target_iso = target.isoformat()
+    today_urls = {
+        str(item.get("url") or "").strip()
+        for item in source_results or []
+        if str(item.get("url") or "").strip()
+    }
+    kept = []
+    for news in news_items or []:
+        url = str(get_value(news, "url", "") or "").strip()
+        date_text = str(get_value(news, "date_check", "") or "").strip()
+        if url and url in today_urls:
+            if isinstance(news, dict):
+                news["date_check"] = target_iso
+            else:
+                news.date_check = target_iso
+            kept.append(news)
+            continue
+        if text_mentions_local_day(date_text, target):
+            if isinstance(news, dict):
+                news["date_check"] = target_iso
+            else:
+                news.date_check = target_iso
+            kept.append(news)
+    return kept
 
 
 
@@ -1776,9 +1808,10 @@ if not st.session_state.report_ready:
 
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
+            current_date_iso = current_dt.date().isoformat()
             reset_search_diagnostics()
-            st.info("🔎 正在启动消费电子日报专用搜索：Tavily 多查询扩展，国内科技新闻、产品参数和供应链权重优先。")
-            st.caption("本频道为宽松日报模式：不因缺少标准时间戳直接剔除结果，优先按每日重要度、中文站点、中国公司和硬件/供应链相关性排序。")
+            st.info("🔎 正在启动消费电子当日日报专用搜索：Tavily 多查询扩展，国内科技新闻、产品参数和供应链权重优先。")
+            st.caption(f"本频道按当日新闻硬过滤：只保留 {current_date_iso} 当天发布，或文本明确标注当天日期的结果。")
             st.caption("本频道固定使用 DeepSeek 生成，不启用 Gemini 主模型或轻任务模型。")
             st.caption("本次搜索引擎：Tavily（消费电子日报专用）")
 
@@ -1790,26 +1823,25 @@ if not st.session_state.report_ready:
                     raw_results = search_consumer_daily_tavily(
                         topic_pack,
                         domain_text,
-                        time_limit_dict[time_opt],
+                        "d",
                         tavily_key=tavily_key,
                         query_suffix=query_suffix,
-                        max_results_per_query=14,
-                        max_queries=6,
-                        broad_query_count=2,
+                        max_results_per_query=16,
+                        max_queries=8,
+                        broad_query_count=3,
                     )
-                    top_results = list(raw_results or [])[:42]
-                    freshness_stats = {
-                        "enabled": False,
-                        "input_count": len(raw_results or []),
-                        "kept_count": len(top_results),
-                        "window_label": "消费电子日报宽松模式：保留近期重要新闻，不按缺失时间戳硬剔除",
-                        "anchor_time": current_dt.isoformat(),
-                    }
+                    daily_results, freshness_stats, freshness_warnings = filter_results_to_local_day(
+                        raw_results,
+                        current_dt.date(),
+                        tzinfo=LOCAL_TZ,
+                        allow_text_date=True,
+                    )
+                    top_results = list(daily_results or [])[:64]
 
                     if not top_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic_label,
-                            warnings=[],
+                            warnings=freshness_warnings,
                             freshness_stats=freshness_stats,
                             focus_tags=topic_pack.get("tags", []),
                         )
@@ -1817,18 +1849,21 @@ if not st.session_state.report_ready:
 
                     focus_hint = build_focus_hint(topic_pack, china_mode=False)
                     daily_guidance = (
-                        f"{focus_hint}；宽松日报模式：目标是每日科技资讯的广度和重要度，不是严格法律/安全审查。"
+                        f"{focus_hint}；当日日报硬规则：只允许使用 {current_date_iso} 当天发布的新闻，"
+                        "不要把正文里回顾的 2024/2025/旧季度数据当作今天新闻本身。"
+                        "目标是每日科技资讯的广度和重要度，不是法律/安全专项审查。"
                         "同等重要度下，中国国内新闻、中文科技媒体、中国公司、国产供应链、产品参数、硬件升级、量产与订单优先。"
                         "海外新闻只保留确有产品、AI、智能汽车、供应链或新型显示参考价值的重要事件。"
                         "法律、版权、隐私、安全漏洞类新闻默认降权，除非直接影响硬件量产、供应链准入或产业政策。"
-                        "时间线需要尽量覆盖多条真实新闻，不要把不同公司、不同产品或不同赛道过度合并成一个泛泛趋势。"
+                        "时间线需要尽量覆盖多条真实新闻，不要把不同公司、不同产品或不同赛道过度合并成一个泛泛趋势；"
+                        f"所有 date/date_check 均应写成 {current_date_iso} 或 {current_dt.strftime('%m月%d日')}。"
                     )
                     event_blueprints = build_event_blueprints(
                         ai,
                         top_results[:CONSUMER_DAILY_EVENT_INPUT_LIMIT],
                         topic_key,
                         current_date_str,
-                        time_opt,
+                        "当天",
                         history_hint="",
                         guidance=daily_guidance,
                     )
@@ -1853,17 +1888,24 @@ if not st.session_state.report_ready:
                         topic_key,
                         crawl_result["content"],
                         current_date_str,
-                        time_opt,
+                        "当天",
                         "",
                         event_blueprints=analysis_events,
                         source_mode=crawl_result["source_mode"],
                         guidance=(
-                            f"{daily_guidance}；本频道是每日消费电子日报，每个专题尽量保留 4 到 5 条不同的重要新闻。"
+                            f"{daily_guidance}；本频道是每日消费电子日报，每个专题尽量保留 {CONSUMER_DAILY_MIN_NEWS_PER_TOPIC} 到 {CONSUMER_DAILY_MAX_NEWS_PER_TOPIC} 条不同的重要新闻。"
                             "【事件核心】必须多截取事件完整链条：谁、什么产品/业务、发生了什么、参数或数据是什么、国内外市场/供应链为什么重要。"
-                            "不要输出时间线匹配原因、事件判重说明或“共享事件ID”之类内部处理文字。"
+                            f"严禁输出早于 {current_date_iso} 的旧新闻；不要输出时间线匹配原因、事件判重说明或“共享事件ID”之类内部处理文字。"
                         ),
                         raw_search_results=analysis_results,
                         map_ai_driver=ai,
+                        min_news_count=CONSUMER_DAILY_MIN_NEWS_PER_TOPIC,
+                        max_news_count=CONSUMER_DAILY_MAX_NEWS_PER_TOPIC,
+                    )
+                    final_news_list = keep_news_items_for_local_day(
+                        final_news_list,
+                        top_results,
+                        current_dt.date(),
                     )
 
                     deep_data_res = None
@@ -1875,7 +1917,7 @@ if not st.session_state.report_ready:
                                 "data": deduped_news,
                                 "source_mode": crawl_result["source_mode"],
                                 "crawler_valid_count": crawl_result["valid_count"],
-                                "warnings": list(crawl_result.get("warnings", [])),
+                                "warnings": list(crawl_result.get("warnings", [])) + list(freshness_warnings),
                                 "extraction_stats": crawl_result.get("stats", {}),
                                 "freshness_stats": freshness_stats,
                                 "focus_tags": topic_pack.get("tags", []),
@@ -1885,7 +1927,7 @@ if not st.session_state.report_ready:
                     timeline_data_res = {
                         "topic": topic_label,
                         "events": timeline_events,
-                        "warnings": list(crawl_result.get("warnings", [])),
+                        "warnings": list(crawl_result.get("warnings", [])) + list(freshness_warnings),
                         "extraction_stats": crawl_result.get("stats", {}),
                         "freshness_stats": freshness_stats,
                         "focus_tags": topic_pack.get("tags", []),
@@ -1926,8 +1968,8 @@ if not st.session_state.report_ready:
                 notices=[],
                 diagnostics=get_search_diagnostics(),
             )
-            runtime["mode"] = "consumer_daily_relaxed"
-            runtime["strict_freshness_audit"] = False
+            runtime["mode"] = "consumer_daily_today_strict"
+            runtime["strict_freshness_audit"] = True
             return all_deep_data, all_timeline_data, ai.label, runtime
 
         if start_consumer_btn and tavily_key:
