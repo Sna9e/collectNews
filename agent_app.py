@@ -1213,7 +1213,7 @@ with st.sidebar:
             if st.button("硬科技优先预设", key="btn_exa_hardtech"):
                 apply_exa_hardtech_preset()
 
-        st.caption("默认已经改为 Exa：`auto + news + highlights`。选择 Tavily 时也会复用下方必含/排除关键词做查询增强和结果降噪。")
+        st.caption("默认已经改为 Exa：`auto + news + highlights`。选择 Tavily 时会启用 news + general 双通道聚合，并复用下方必含/排除关键词做查询增强和结果降噪。")
         exa_search_type = st.selectbox(
             "Exa 搜索类型",
             ["auto", "fast", "instant", "deep"],
