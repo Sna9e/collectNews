@@ -41,11 +41,12 @@ from tools.search_engine import (
     merge_sites_text,
     reset_search_diagnostics,
     safe_run_async_crawler,
-    search_consumer_daily_tavily,
+    search_consumer_daily,
     search_web,
     text_mentions_local_day,
 )
 
+_LOCAL_DOTENV_CACHE = None
 _LOCAL_SECRET_CACHE = None
 
 
@@ -59,6 +60,43 @@ def _looks_like_placeholder_secret(value):
         or "placeholder" in normalized
         or normalized in {"changeme", "replace-me", "xxx", "xxxxx"}
     )
+
+
+def _load_dotenv_fallback():
+    global _LOCAL_DOTENV_CACHE
+    if _LOCAL_DOTENV_CACHE is not None:
+        return _LOCAL_DOTENV_CACHE
+
+    candidates = []
+    for candidate in (
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
+    ):
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    merged = {}
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            for raw_line in candidate.read_text(encoding="utf-8-sig").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line.lower().startswith("export "):
+                    line = line[7:].strip()
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in merged:
+                    merged[key] = value
+        except Exception as exc:
+            print(f"⚠️ Failed to load .env from {candidate}: {exc}")
+
+    _LOCAL_DOTENV_CACHE = merged
+    return _LOCAL_DOTENV_CACHE
 
 
 def _load_local_secret_fallback():
@@ -131,6 +169,7 @@ GEMINI_MODEL_OPTIONS = [
     "__custom__",
 ]
 DEFAULT_SEARCH_PROVIDER = "exa"
+DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER = "hybrid"
 DEFAULT_EXA_SEARCH_TYPE = "auto"
 DEFAULT_EXA_CATEGORY = "news"
 DEFAULT_EXA_RESULT_LIMIT = 10
@@ -334,6 +373,32 @@ def format_search_provider_option(provider):
         "tavily": "Tavily",
     }
     return labels.get(normalize_search_provider(provider), "Exa（推荐默认）")
+
+
+def format_consumer_daily_provider_option(provider):
+    labels = {
+        "hybrid": "混合（Exa + Tavily，推荐）",
+        "tavily": "Tavily（默认兼容）",
+        "exa": "Exa（广度增强）",
+    }
+    return labels.get(normalize_search_provider(provider), "混合（Exa + Tavily，推荐）")
+
+
+def build_consumer_daily_exa_settings(base_settings):
+    settings = dict(base_settings or {})
+    settings.update(
+        {
+            "search_type": "auto",
+            "category": "news",
+            "num_results": max(12, int(settings.get("num_results") or 12)),
+            "content_mode": "highlights",
+            "highlights_max_characters": max(2600, int(settings.get("highlights_max_characters") or 2600)),
+            "text_max_characters": max(4200, int(settings.get("text_max_characters") or 4200)),
+            "include_text": "",
+            "exclude_text": "lawsuit court copyright privacy security",
+        }
+    )
+    return settings
 
 
 def format_gemini_model_option(model_name):
@@ -922,6 +987,8 @@ def collect_consumer_daily_material(raw_results, max_items=CONSUMER_DAILY_SOURCE
             continue
         published = item.get("published_at_resolved") or item.get("published_date") or item.get("published") or ""
         source = item.get("source", "") or ""
+        provider = item.get("provider") or item.get("search_provider") or ""
+        region_hint = item.get("region_hint") or ""
         url = item.get("url", "") or ""
         snippet = _clean_consumer_daily_snippet(item.get("content", ""), max_chars=900, topic_pack=topic_pack)
         blocks.append(
@@ -930,6 +997,8 @@ def collect_consumer_daily_material(raw_results, max_items=CONSUMER_DAILY_SOURCE
                     f"【当日搜索卡片 {index}】",
                     f"发布时间：{published}",
                     f"来源：{source}",
+                    f"搜索引擎：{provider}",
+                    f"地区提示：{region_hint}",
                     f"标题：{title}",
                     f"摘要：{snippet}",
                     f"链接：{url}",
@@ -1239,6 +1308,10 @@ with st.sidebar:
         if not _looks_like_placeholder_secret(env_value):
             return env_value
 
+        dotenv_value = _load_dotenv_fallback().get(name, "")
+        if not _looks_like_placeholder_secret(dotenv_value):
+            return dotenv_value
+
         local_fallback = _load_local_secret_fallback().get(name, "")
         if not _looks_like_placeholder_secret(local_fallback):
             return local_fallback
@@ -1252,6 +1325,11 @@ with st.sidebar:
     jina_key = _get_runtime_secret("JINA_API_KEY", "")
     gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
     gist_id = _get_runtime_secret("GIST_ID", "")
+    consumer_daily_provider_config = normalize_search_provider(
+        _get_runtime_secret("CONSUMER_DAILY_SEARCH_PROVIDER", DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER)
+    )
+    if "consumer_daily_search_provider" not in st.session_state:
+        st.session_state.consumer_daily_search_provider = consumer_daily_provider_config
     if (api_key or gemini_key) and (tavily_key or exa_key):
         st.success("🔐 部门专属安全引擎已连接")
     else:
@@ -1874,9 +1952,25 @@ if not st.session_state.report_ready:
 
     with tab3:
         st.markdown(
-            "💡 **本频道面向 FPC 制造商研发部门**：默认使用 Tavily 搜索与 DeepSeek 生成，"
+            "💡 **本频道面向 FPC 制造商研发部门**：默认使用 Exa + Tavily 混合搜索与 DeepSeek 生成，"
             "重点跟踪消费电子、AR/VR/AI眼镜、AI、电动汽车、折叠屏与新型显示，并提高中国国内新闻权重。"
         )
+        consumer_search_provider = st.selectbox(
+            "频道三搜索引擎",
+            ["hybrid", "tavily", "exa"],
+            key="consumer_daily_search_provider",
+            format_func=format_consumer_daily_provider_option,
+        )
+        active_consumer_search_provider, consumer_search_notices = resolve_search_provider(
+            consumer_search_provider,
+            tavily_key,
+            exa_key,
+        )
+        consumer_exa_settings = build_consumer_daily_exa_settings(exa_search_settings)
+        if active_consumer_search_provider:
+            st.caption(f"频道三实际搜索：{format_search_provider_label(active_consumer_search_provider)}。没有 EXA_API_KEY 时会自动回退 Tavily。")
+        for notice in consumer_search_notices:
+            st.caption(notice)
         consumer_topics = get_consumer_electronics_topics()
         consumer_sites = st.text_area(
             "消费电子重点搜索源（中国站点优先，同时保留海外产品站点）",
@@ -1891,35 +1985,51 @@ if not st.session_state.report_ready:
         )
         start_consumer_btn = st.button("📱 一键生成《科技消费电子日报》", type="primary", key="btn_consumer_daily")
 
-        def run_consumer_daily_pipeline(consumer_topic_list, domain_text, query_suffix=""):
+        def run_consumer_daily_pipeline(
+            consumer_topic_list,
+            domain_text,
+            query_suffix="",
+            requested_search_provider=DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER,
+            resolved_search_provider="",
+            search_notices=None,
+            resolved_search_settings=None,
+        ):
             ai = AI_Driver(api_key, model_id, provider="deepseek")
             if not ai.valid:
                 st.error("当前没有可用的 DeepSeek 密钥。频道三固定使用 DEEPSEEK_API_KEY。")
                 return [], [], "未启用模型", {}
+            if not resolved_search_provider:
+                st.error("当前没有可用的频道三搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
+                return [], [], ai.label, {}
 
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
             current_date_iso = current_dt.date().isoformat()
             reset_search_diagnostics()
-            st.info("🔎 正在启动消费电子当日日报专用搜索：Tavily 多查询扩展，国内科技新闻、产品参数和供应链权重优先。")
+            st.info("🔎 正在启动消费电子当日日报专用搜索：Exa/Tavily 按专题并行扩展，国内科技新闻、产品参数和供应链权重优先。")
             st.caption(f"本频道按当日新闻硬过滤：只保留 {current_date_iso} 当天发布，或文本明确标注当天日期的结果。")
             st.caption("本频道固定使用 DeepSeek 生成，不启用 Gemini 主模型或轻任务模型。")
-            st.caption("本次搜索引擎：Tavily（消费电子日报专用）")
+            st.caption(f"本次搜索引擎：{format_search_provider_label(resolved_search_provider)}（消费电子日报专用）")
+            for notice in search_notices or []:
+                st.caption(notice)
 
             def process_consumer_daily_task(topic_pack, index):
                 topic_label = topic_pack.get("title", "未命名专题")
                 freshness_stats = {}
                 try:
                     topic_key = topic_label
-                    raw_results = search_consumer_daily_tavily(
+                    raw_results = search_consumer_daily(
                         topic_pack,
                         domain_text,
                         "d",
                         tavily_key=tavily_key,
+                        provider=resolved_search_provider,
+                        exa_key=exa_key,
+                        exa_settings=resolved_search_settings,
                         query_suffix=query_suffix,
                         max_results_per_query=16,
-                        max_queries=10,
-                        broad_query_count=4,
+                        max_queries=12,
+                        broad_query_count=5,
                         target_date=current_dt.date(),
                     )
                     daily_results, freshness_stats, freshness_warnings = filter_results_to_local_day(
@@ -1997,9 +2107,16 @@ if not st.session_state.report_ready:
                     if final_news_list:
                         deduped_news = dedupe_news_items(final_news_list)
                         if deduped_news:
+                            for news_item in deduped_news:
+                                if isinstance(news_item, dict):
+                                    news_item["event_id"] = ""
+                                elif hasattr(news_item, "event_id"):
+                                    news_item.event_id = ""
                             deep_data_res = {
                                 "topic": topic_label,
                                 "data": deduped_news,
+                                "report_style": "consumer_daily",
+                                "search_provider": resolved_search_provider,
                                 "source_mode": crawl_result["source_mode"],
                                 "crawler_valid_count": crawl_result["valid_count"],
                                 "warnings": list(crawl_result.get("warnings", [])) + list(freshness_warnings),
@@ -2048,20 +2165,24 @@ if not st.session_state.report_ready:
             all_deep_data = [item[1] for item in results if item[1] is not None]
             all_timeline_data = [item[2] for item in results if item[2] is not None]
             runtime = build_run_metadata(
-                requested_provider="tavily",
-                resolved_provider="tavily",
-                notices=[],
+                requested_provider=requested_search_provider,
+                resolved_provider=resolved_search_provider,
+                notices=list(search_notices or []),
                 diagnostics=get_search_diagnostics(),
             )
             runtime["mode"] = "consumer_daily_today_strict"
             runtime["strict_freshness_audit"] = True
             return all_deep_data, all_timeline_data, ai.label, runtime
 
-        if start_consumer_btn and tavily_key:
+        if start_consumer_btn and active_consumer_search_provider:
             all_deep_data, all_timeline_data, active_model_name, search_runtime = run_consumer_daily_pipeline(
                 consumer_topics,
                 consumer_sites,
                 query_suffix=consumer_query_suffix,
+                requested_search_provider=consumer_search_provider,
+                resolved_search_provider=active_consumer_search_provider,
+                search_notices=consumer_search_notices,
+                resolved_search_settings=consumer_exa_settings,
             )
             if all_deep_data or all_timeline_data:
                 store_report_outputs(
@@ -2075,8 +2196,8 @@ if not st.session_state.report_ready:
                 st.rerun()
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
-        elif start_consumer_btn and not tavily_key:
-            st.error("频道三默认使用 Tavily。请配置 TAVILY_API_KEY 后再生成消费电子日报。")
+        elif start_consumer_btn and not active_consumer_search_provider:
+            st.error("频道三至少需要 TAVILY_API_KEY 或 EXA_API_KEY。若未配置 EXA_API_KEY，hybrid 会自动回退 Tavily。")
 
 else:
     if not st.session_state.report_celebrated:
