@@ -187,8 +187,9 @@ GEMINI_MODEL_OPTIONS = [
     "__custom__",
 ]
 DEFAULT_SEARCH_PROVIDER = "exa"
-DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER = "hybrid"
+DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER = "exa"
 DEFAULT_CONSUMER_DAILY_TIME_WINDOW = "72h"
+DEFAULT_CONSUMER_DAILY_SEARCH_DEPTH = "wide"
 DEFAULT_EXA_SEARCH_TYPE = "auto"
 DEFAULT_EXA_CATEGORY = "news"
 DEFAULT_EXA_RESULT_LIMIT = 10
@@ -396,11 +397,11 @@ def format_search_provider_option(provider):
 
 def format_consumer_daily_provider_option(provider):
     labels = {
-        "hybrid": "混合（Exa + Tavily，推荐）",
-        "tavily": "Tavily（默认兼容）",
-        "exa": "Exa（广度增强）",
+        "hybrid": "混合（历史兼容，不作为频道三默认）",
+        "tavily": "Tavily（历史兼容，不作为频道三默认）",
+        "exa": "Exa（频道三专用）",
     }
-    return labels.get(normalize_search_provider(provider), "混合（Exa + Tavily，推荐）")
+    return labels.get(normalize_search_provider(provider), "Exa（频道三专用）")
 
 
 def build_consumer_daily_exa_settings(base_settings):
@@ -409,7 +410,7 @@ def build_consumer_daily_exa_settings(base_settings):
         {
             "search_type": "auto",
             "category": "news",
-            "num_results": max(12, int(settings.get("num_results") or 12)),
+            "num_results": max(8, int(settings.get("num_results") or 8)),
             "content_mode": "highlights",
             "highlights_max_characters": max(2600, int(settings.get("highlights_max_characters") or 2600)),
             "text_max_characters": max(4200, int(settings.get("text_max_characters") or 4200)),
@@ -1344,9 +1345,15 @@ with st.sidebar:
     jina_key = _get_runtime_secret("JINA_API_KEY", "")
     gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
     gist_id = _get_runtime_secret("GIST_ID", "")
-    consumer_daily_provider_config = normalize_search_provider(
+    requested_consumer_provider_config = normalize_search_provider(
         _get_runtime_secret("CONSUMER_DAILY_SEARCH_PROVIDER", DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER)
     )
+    consumer_daily_provider_config = "exa"
+    consumer_daily_search_depth_config = str(
+        _get_runtime_secret("CONSUMER_DAILY_SEARCH_DEPTH", DEFAULT_CONSUMER_DAILY_SEARCH_DEPTH) or DEFAULT_CONSUMER_DAILY_SEARCH_DEPTH
+    ).strip().lower()
+    if consumer_daily_search_depth_config not in {"light", "normal", "wide"}:
+        consumer_daily_search_depth_config = DEFAULT_CONSUMER_DAILY_SEARCH_DEPTH
     consumer_daily_time_window_config = str(
         _get_runtime_secret("CONSUMER_DAILY_TIME_WINDOW", DEFAULT_CONSUMER_DAILY_TIME_WINDOW) or DEFAULT_CONSUMER_DAILY_TIME_WINDOW
     ).strip().lower()
@@ -1354,6 +1361,8 @@ with st.sidebar:
         consumer_daily_time_window_config = DEFAULT_CONSUMER_DAILY_TIME_WINDOW
     if "consumer_daily_search_provider" not in st.session_state:
         st.session_state.consumer_daily_search_provider = consumer_daily_provider_config
+    if "consumer_daily_search_depth" not in st.session_state:
+        st.session_state.consumer_daily_search_depth = consumer_daily_search_depth_config
     if "consumer_daily_time_window" not in st.session_state:
         st.session_state.consumer_daily_time_window = consumer_daily_time_window_config
     if (api_key or gemini_key) and (tavily_key or exa_key):
@@ -1978,25 +1987,34 @@ if not st.session_state.report_ready:
 
     with tab3:
         st.markdown(
-            "💡 **本频道面向 FPC 制造商研发部门**：默认使用 Exa + Tavily 混合搜索与 DeepSeek 生成，"
+            "💡 **本频道面向 FPC 制造商研发部门**：本轮固定使用 Exa 广度召回与 DeepSeek 生成，"
             "重点跟踪消费电子、AR/VR/AI眼镜、AI、电动汽车、折叠屏与新型显示，并提高中国国内新闻权重。"
         )
-        consumer_search_provider = st.selectbox(
-            "频道三搜索引擎",
-            ["hybrid", "tavily", "exa"],
-            key="consumer_daily_search_provider",
-            format_func=format_consumer_daily_provider_option,
-        )
-        active_consumer_search_provider, consumer_search_notices = resolve_search_provider(
-            consumer_search_provider,
-            tavily_key,
-            exa_key,
-        )
+        consumer_search_provider = "exa"
+        st.session_state.consumer_daily_search_provider = "exa"
+        active_consumer_search_provider = "exa" if exa_key else ""
+        consumer_search_notices = []
+        if requested_consumer_provider_config != "exa":
+            consumer_search_notices.append(
+                f"检测到 CONSUMER_DAILY_SEARCH_PROVIDER={requested_consumer_provider_config}，但本轮频道三强制使用 Exa-only。"
+            )
+        if not exa_key:
+            consumer_search_notices.append("频道三 Exa-only 模式未检测到 EXA_API_KEY，不能回退 Tavily。")
         consumer_exa_settings = build_consumer_daily_exa_settings(exa_search_settings)
         if active_consumer_search_provider:
-            st.caption(f"频道三实际搜索：{format_search_provider_label(active_consumer_search_provider)}。没有 EXA_API_KEY 时会自动回退 Tavily。")
+            st.caption(f"频道三实际搜索：{format_search_provider_label(active_consumer_search_provider)}。本频道不再自动回退 Tavily。")
         for notice in consumer_search_notices:
             st.caption(notice)
+        consumer_search_depth = st.selectbox(
+            "频道三 Exa 搜索广度",
+            ["wide", "normal", "light"],
+            key="consumer_daily_search_depth",
+            format_func=lambda value: {
+                "light": "light：每专题约 8 条 query",
+                "normal": "normal：每专题约 15 条 query",
+                "wide": "wide：每专题约 20–30 条 query（默认）",
+            }.get(value, value),
+        )
         consumer_time_window = st.selectbox(
             "频道三事件验证时间窗口",
             ["72h", "24h", "today", "7d"],
@@ -2032,13 +2050,14 @@ if not st.session_state.report_ready:
             search_notices=None,
             resolved_search_settings=None,
             configured_time_window=DEFAULT_CONSUMER_DAILY_TIME_WINDOW,
+            search_depth=DEFAULT_CONSUMER_DAILY_SEARCH_DEPTH,
         ):
             ai = AI_Driver(api_key, model_id, provider="deepseek")
             if not ai.valid:
                 st.error("当前没有可用的 DeepSeek 密钥。频道三固定使用 DEEPSEEK_API_KEY。")
                 return [], [], "未启用模型", {}
             if not resolved_search_provider:
-                st.error("当前没有可用的频道三搜索引擎密钥。请至少配置 TAVILY_API_KEY 或 EXA_API_KEY。")
+                st.error("频道三当前为 Exa-only 模式。请配置 EXA_API_KEY；本频道不再静默回退 Tavily。")
                 return [], [], ai.label, {}
 
             current_dt = datetime.datetime.now(LOCAL_TZ)
@@ -2048,7 +2067,8 @@ if not st.session_state.report_ready:
             st.info("🔎 正在启动消费电子日报事件级验证：Discovery Search 发现候选，Verification Search 做多源交叉验证。")
             st.caption(f"本频道目标日期：{current_date_iso}；验证窗口：{configured_time_window}。AI 一周资讯默认可放宽到 7d。")
             st.caption("本频道固定使用 DeepSeek 生成，不启用 Gemini 主模型或轻任务模型。")
-            st.caption(f"本次搜索引擎：{format_search_provider_label(resolved_search_provider)}（消费电子日报专用）")
+            st.caption(f"本次搜索引擎：{format_search_provider_label(resolved_search_provider)}（Exa-only，消费电子日报专用）")
+            st.caption(f"Exa 搜索广度：{search_depth}")
             for notice in search_notices or []:
                 st.caption(notice)
 
@@ -2068,10 +2088,13 @@ if not st.session_state.report_ready:
                         exa_key=exa_key,
                         exa_settings=resolved_search_settings,
                         query_suffix=query_suffix,
-                        max_results_per_query=18,
-                        max_queries=14,
-                        broad_query_count=6,
+                        max_results_per_query=8,
+                        max_queries=30 if search_depth == "wide" else (15 if search_depth == "normal" else 8),
+                        broad_query_count=0,
                         target_date=current_dt.date(),
+                        search_depth=search_depth,
+                        discovery_candidate_limit=80 if search_depth == "wide" else (64 if search_depth == "normal" else 40),
+                        strict_required=False,
                     )
 
                     if not raw_results:
@@ -2322,6 +2345,7 @@ if not st.session_state.report_ready:
                 search_notices=consumer_search_notices,
                 resolved_search_settings=consumer_exa_settings,
                 configured_time_window=consumer_time_window,
+                search_depth=consumer_search_depth,
             )
             if all_deep_data or all_timeline_data:
                 store_report_outputs(
@@ -2336,7 +2360,7 @@ if not st.session_state.report_ready:
             else:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
         elif start_consumer_btn and not active_consumer_search_provider:
-            st.error("频道三至少需要 TAVILY_API_KEY 或 EXA_API_KEY。若未配置 EXA_API_KEY，hybrid 会自动回退 Tavily。")
+            st.error("频道三当前只使用 Exa。请配置 EXA_API_KEY；Tavily 不再作为频道三默认或自动回退。")
 
 else:
     if not st.session_state.report_celebrated:
