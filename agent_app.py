@@ -22,6 +22,17 @@ from tools.company_query_packs import (
     get_company_query_pack,
     rank_results_by_company_pack,
 )
+from tools.consumer_daily_validation import (
+    build_verified_news_package,
+    build_verified_topic_events,
+    dataclass_to_dict,
+    enrich_news_items_with_verified_events,
+    event_blueprints_from_verified_topic,
+    normalize_time_window,
+    raw_results_from_verified_topic,
+    validate_consumer_daily_quality,
+    verified_package_to_deepseek_material,
+)
 from tools.intelligence_packs import (
     build_focus_hint,
     get_consumer_electronics_sites_text,
@@ -152,6 +163,8 @@ CONSUMER_DAILY_CRAWL_URL_LIMIT = 14
 CONSUMER_DAILY_SOURCE_RESULT_LIMIT = 28
 CONSUMER_DAILY_MIN_NEWS_PER_TOPIC = 6
 CONSUMER_DAILY_MAX_NEWS_PER_TOPIC = 8
+CONSUMER_DAILY_VERIFICATION_EVENT_LIMIT = 8
+CONSUMER_DAILY_VERIFICATION_QUERY_LIMIT = 5
 MAX_SOURCE_CHARS_PER_URL = 2400
 DEFAULT_GEMINI_LIGHT_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_GEMINI_MAIN_MODEL = "gemini-2.5-flash-lite"
@@ -170,6 +183,7 @@ GEMINI_MODEL_OPTIONS = [
 ]
 DEFAULT_SEARCH_PROVIDER = "exa"
 DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER = "hybrid"
+DEFAULT_CONSUMER_DAILY_TIME_WINDOW = "72h"
 DEFAULT_EXA_SEARCH_TYPE = "auto"
 DEFAULT_EXA_CATEGORY = "news"
 DEFAULT_EXA_RESULT_LIMIT = 10
@@ -1328,8 +1342,15 @@ with st.sidebar:
     consumer_daily_provider_config = normalize_search_provider(
         _get_runtime_secret("CONSUMER_DAILY_SEARCH_PROVIDER", DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER)
     )
+    consumer_daily_time_window_config = str(
+        _get_runtime_secret("CONSUMER_DAILY_TIME_WINDOW", DEFAULT_CONSUMER_DAILY_TIME_WINDOW) or DEFAULT_CONSUMER_DAILY_TIME_WINDOW
+    ).strip().lower()
+    if consumer_daily_time_window_config not in {"today", "24h", "72h", "7d"}:
+        consumer_daily_time_window_config = DEFAULT_CONSUMER_DAILY_TIME_WINDOW
     if "consumer_daily_search_provider" not in st.session_state:
         st.session_state.consumer_daily_search_provider = consumer_daily_provider_config
+    if "consumer_daily_time_window" not in st.session_state:
+        st.session_state.consumer_daily_time_window = consumer_daily_time_window_config
     if (api_key or gemini_key) and (tavily_key or exa_key):
         st.success("🔐 部门专属安全引擎已连接")
     else:
@@ -1971,6 +1992,18 @@ if not st.session_state.report_ready:
             st.caption(f"频道三实际搜索：{format_search_provider_label(active_consumer_search_provider)}。没有 EXA_API_KEY 时会自动回退 Tavily。")
         for notice in consumer_search_notices:
             st.caption(notice)
+        consumer_time_window = st.selectbox(
+            "频道三事件验证时间窗口",
+            ["72h", "24h", "today", "7d"],
+            key="consumer_daily_time_window",
+            format_func=lambda value: {
+                "today": "仅今天",
+                "24h": "近 24 小时",
+                "72h": "近 72 小时（默认）",
+                "7d": "近 7 天",
+            }.get(value, value),
+        )
+        st.caption("AI 一周资讯专题在默认 72h 设置下会自动放宽到 7d；正式 PPT 只进入 confirmed/likely 事件。")
         consumer_topics = get_consumer_electronics_topics()
         consumer_sites = st.text_area(
             "消费电子重点搜索源（中国站点优先，同时保留海外产品站点）",
@@ -1993,6 +2026,7 @@ if not st.session_state.report_ready:
             resolved_search_provider="",
             search_notices=None,
             resolved_search_settings=None,
+            configured_time_window=DEFAULT_CONSUMER_DAILY_TIME_WINDOW,
         ):
             ai = AI_Driver(api_key, model_id, provider="deepseek")
             if not ai.valid:
@@ -2006,8 +2040,8 @@ if not st.session_state.report_ready:
             current_date_str = current_dt.strftime("%Y年%m月%d日")
             current_date_iso = current_dt.date().isoformat()
             reset_search_diagnostics()
-            st.info("🔎 正在启动消费电子当日日报专用搜索：Exa/Tavily 按专题并行扩展，国内科技新闻、产品参数和供应链权重优先。")
-            st.caption(f"本频道按当日新闻硬过滤：只保留 {current_date_iso} 当天发布，或文本明确标注当天日期的结果。")
+            st.info("🔎 正在启动消费电子日报事件级验证：Discovery Search 发现候选，Verification Search 做多源交叉验证。")
+            st.caption(f"本频道目标日期：{current_date_iso}；验证窗口：{configured_time_window}。AI 一周资讯默认可放宽到 7d。")
             st.caption("本频道固定使用 DeepSeek 生成，不启用 Gemini 主模型或轻任务模型。")
             st.caption(f"本次搜索引擎：{format_search_provider_label(resolved_search_provider)}（消费电子日报专用）")
             for notice in search_notices or []:
@@ -2018,123 +2052,180 @@ if not st.session_state.report_ready:
                 freshness_stats = {}
                 try:
                     topic_key = topic_label
+                    topic_time_window = normalize_time_window(topic_pack, configured_time_window)
+                    search_timelimit = "w" if topic_time_window in {"72h", "7d"} else "d"
                     raw_results = search_consumer_daily(
                         topic_pack,
                         domain_text,
-                        "d",
+                        search_timelimit,
                         tavily_key=tavily_key,
                         provider=resolved_search_provider,
                         exa_key=exa_key,
                         exa_settings=resolved_search_settings,
                         query_suffix=query_suffix,
-                        max_results_per_query=16,
-                        max_queries=12,
-                        broad_query_count=5,
+                        max_results_per_query=18,
+                        max_queries=14,
+                        broad_query_count=6,
                         target_date=current_dt.date(),
                     )
-                    daily_results, freshness_stats, freshness_warnings = filter_results_to_local_day(
-                        raw_results,
-                        current_dt.date(),
-                        tzinfo=LOCAL_TZ,
-                        allow_text_date=True,
-                    )
-                    top_results = list(daily_results or [])[:64]
 
-                    if not top_results:
+                    if not raw_results:
                         deep_empty, timeline_empty = build_empty_section_payload(
                             topic_label,
-                            warnings=freshness_warnings,
+                            warnings=["Discovery Search 未返回候选结果。"],
+                            freshness_stats={"enabled": True, "time_window": topic_time_window, "raw_count": 0},
+                            focus_tags=topic_pack.get("tags", []),
+                        )
+                        deep_empty["report_style"] = "consumer_daily"
+                        return index, deep_empty, timeline_empty, None
+
+                    def verification_search_fn(query, verification_topic_pack):
+                        return search_web(
+                            query,
+                            "",
+                            search_timelimit,
+                            max_results=10,
+                            tavily_key=tavily_key,
+                            provider=resolved_search_provider,
+                            exa_key=exa_key,
+                            exa_settings=resolved_search_settings,
+                        )
+
+                    topic_verified = build_verified_topic_events(
+                        topic_pack,
+                        raw_results,
+                        current_dt.date(),
+                        time_window=topic_time_window,
+                        verification_search_fn=verification_search_fn,
+                        max_initial_events=CONSUMER_DAILY_VERIFICATION_EVENT_LIMIT,
+                        verification_queries_per_event=CONSUMER_DAILY_VERIFICATION_QUERY_LIMIT,
+                    )
+                    formal_events = topic_verified.confirmed_events + topic_verified.likely_events
+                    freshness_stats = {
+                        "enabled": True,
+                        "time_window": topic_verified.time_window,
+                        "raw_count": len(raw_results or []),
+                        "confirmed_events": len(topic_verified.confirmed_events),
+                        "likely_events": len(topic_verified.likely_events),
+                        "rejected_or_weak_events": len(topic_verified.rejected_summary),
+                    }
+
+                    if not formal_events:
+                        deep_empty, timeline_empty = build_empty_section_payload(
+                            topic_label,
+                            warnings=list(topic_verified.warnings) or ["今日可确认新闻不足。"],
                             freshness_stats=freshness_stats,
                             focus_tags=topic_pack.get("tags", []),
                         )
-                        return index, deep_empty, timeline_empty
+                        deep_empty.update(
+                            {
+                                "report_style": "consumer_daily",
+                                "source_mode": "consumer_daily_verified_events",
+                                "verified_events": [],
+                                "rejected_summary": [dataclass_to_dict(item) for item in topic_verified.rejected_summary[:12]],
+                                "search_provider": resolved_search_provider,
+                            }
+                        )
+                        return index, deep_empty, timeline_empty, topic_verified
 
                     focus_hint = build_focus_hint(topic_pack, china_mode=False)
                     daily_guidance = (
-                        f"{focus_hint}；当日日报硬规则：只允许使用 {current_date_iso} 当天发布的新闻，"
-                        "不要把正文里回顾的 2024/2025/旧季度数据当作今天新闻本身。"
-                        "目标是每日科技资讯的广度和重要度，不是法律/安全专项审查。"
+                        f"{focus_hint}；频道三当前已进入事件级多源验证链路，DeepSeek 只能使用 verified events。"
+                        f"目标日期是 {current_date_iso}，本专题验证窗口是 {topic_verified.time_window}。"
+                        "不要把旧爆料、旧产品列表、推荐流或单一来源网页当作正式新闻。"
+                        "目标是科技消费电子日报的广度、及时性和可追溯性，不是法律/安全专项审查。"
                         "同等重要度下，中国国内新闻、中文科技媒体、中国公司、国产供应链、产品参数、硬件升级、量产与订单优先。"
                         "海外新闻只保留确有产品、AI、智能汽车、供应链或新型显示参考价值的重要事件。"
                         "法律、版权、隐私、安全漏洞类新闻默认降权，除非直接影响硬件量产、供应链准入或产业政策。"
-                        "时间线需要尽量覆盖多条真实新闻，不要把不同公司、不同产品或不同赛道过度合并成一个泛泛趋势；"
-                        f"所有 date/date_check 均应写成 {current_date_iso} 或 {current_dt.strftime('%m月%d日')}。"
+                        "所有条目必须保留来源数量、主要来源和可信度；likely 事件必须标注“待核实”。"
                     )
-                    event_blueprints = build_event_blueprints(
-                        ai,
-                        top_results[:CONSUMER_DAILY_EVENT_INPUT_LIMIT],
-                        topic_key,
-                        current_date_str,
-                        "当天",
-                        history_hint="",
-                        guidance=daily_guidance,
+                    analysis_events = event_blueprints_from_verified_topic(
+                        topic_verified,
+                        limit=CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT,
                     )
-                    timeline_events = generate_timeline(event_blueprints)
-                    analysis_events = _serialize_event_blueprints(event_blueprints)[:CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT]
-                    analysis_results = top_results[:CONSUMER_DAILY_SOURCE_RESULT_LIMIT]
-                    crawl_result = collect_consumer_daily_material(
-                        analysis_results,
-                        max_items=CONSUMER_DAILY_SOURCE_RESULT_LIMIT,
-                        topic_pack=topic_pack,
+                    analysis_results = raw_results_from_verified_topic(topic_verified)[:CONSUMER_DAILY_SOURCE_RESULT_LIMIT]
+                    verified_package = build_verified_news_package(
+                        [topic_verified],
+                        current_dt.date(),
+                        topic_verified.time_window,
                     )
+                    verified_material = verified_package_to_deepseek_material(verified_package)
                     final_news_list, _ = map_reduce_analysis(
                         ai,
                         topic_key,
-                        crawl_result["content"],
+                        verified_material,
                         current_date_str,
-                        "当天",
+                        topic_verified.time_window,
                         "",
                         event_blueprints=analysis_events,
-                        source_mode=crawl_result["source_mode"],
+                        source_mode="consumer_daily_verified_events",
                         guidance=(
-                            f"{daily_guidance}；本频道是每日消费电子日报，每个专题尽量保留 {CONSUMER_DAILY_MIN_NEWS_PER_TOPIC} 到 {CONSUMER_DAILY_MAX_NEWS_PER_TOPIC} 条不同的重要新闻。"
-                            "【事件核心】必须多截取事件完整链条：谁、什么产品/业务、发生了什么、参数或数据是什么、国内外市场/供应链为什么重要。"
-                            "【深度细节/数据支撑】必须优先写硬件参数、产品规格、销量/份额/价格、供应链环节、量产/订单/渠道等信息。"
-                            f"严禁输出早于 {current_date_iso} 的旧新闻；不要输出时间线匹配原因、事件判重说明或“共享事件ID”之类内部处理文字。"
+                            f"{daily_guidance}；本频道是每日消费电子日报，每个专题最多保留 {CONSUMER_DAILY_MAX_NEWS_PER_TOPIC} 条已验证事件。"
+                            "【事件】写清主体、产品/业务、动作、时间窗口和地区。"
+                            "【为什么重要】要面向 FPC/PCB、光学显示、智能硬件和消费电子研发部门。"
+                            "【已确认信息】必须优先写硬件参数、产品规格、销量/份额、价格、供应链环节、量产/订单/渠道。"
+                            "【证据来源】必须写独立来源数量和主要来源。"
+                            "【仍需核实】仅写输入中已标为 likely 或证据不足的信息；不要虚构。"
+                            "不要输出内部事件ID、时间线匹配原因、事件判重说明或工程调试字段。"
                         ),
                         raw_search_results=analysis_results,
                         map_ai_driver=ai,
-                        min_news_count=CONSUMER_DAILY_MIN_NEWS_PER_TOPIC,
+                        min_news_count=min(CONSUMER_DAILY_MIN_NEWS_PER_TOPIC, max(1, len(formal_events))),
                         max_news_count=CONSUMER_DAILY_MAX_NEWS_PER_TOPIC,
                     )
-                    final_news_list = keep_news_items_for_local_day(
+                    final_news_list = enrich_news_items_with_verified_events(
                         final_news_list,
-                        top_results,
-                        current_dt.date(),
+                        formal_events,
                     )
 
                     deep_data_res = None
                     if final_news_list:
                         deduped_news = dedupe_news_items(final_news_list)
                         if deduped_news:
-                            for news_item in deduped_news:
-                                if isinstance(news_item, dict):
-                                    news_item["event_id"] = ""
-                                elif hasattr(news_item, "event_id"):
-                                    news_item.event_id = ""
                             deep_data_res = {
                                 "topic": topic_label,
                                 "data": deduped_news,
                                 "report_style": "consumer_daily",
                                 "search_provider": resolved_search_provider,
-                                "source_mode": crawl_result["source_mode"],
-                                "crawler_valid_count": crawl_result["valid_count"],
-                                "warnings": list(crawl_result.get("warnings", [])) + list(freshness_warnings),
-                                "extraction_stats": crawl_result.get("stats", {}),
+                                "source_mode": "consumer_daily_verified_events",
+                                "crawler_valid_count": len(analysis_results),
+                                "warnings": list(topic_verified.warnings),
+                                "extraction_stats": {
+                                    "jina_count": 0,
+                                    "direct_html_count": 0,
+                                    "snippet_count": len(analysis_results),
+                                    "verified_event_count": len(formal_events),
+                                },
                                 "freshness_stats": freshness_stats,
                                 "focus_tags": topic_pack.get("tags", []),
                                 "watch_entities": topic_pack.get("companies", []),
+                                "verified_events": [dataclass_to_dict(event) for event in formal_events],
+                                "rejected_summary": [dataclass_to_dict(item) for item in topic_verified.rejected_summary[:12]],
                             }
 
+                    timeline_events = [
+                        {
+                            "date": event.event_date or event.latest_seen_at or current_date_iso,
+                            "event": event.normalized_title,
+                            "source": " / ".join(event.source_names[:3]) or "多源验证",
+                            "source_url": event.evidence_articles[0].url if event.evidence_articles else "",
+                            "confidence_level": event.confidence_level,
+                            "independent_source_count": event.independent_source_count,
+                        }
+                        for event in formal_events[:CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT]
+                    ]
                     timeline_data_res = {
                         "topic": topic_label,
                         "events": timeline_events,
-                        "warnings": list(crawl_result.get("warnings", [])) + list(freshness_warnings),
-                        "extraction_stats": crawl_result.get("stats", {}),
+                        "warnings": list(topic_verified.warnings),
+                        "extraction_stats": {
+                            "snippet_count": len(analysis_results),
+                            "verified_event_count": len(formal_events),
+                        },
                         "freshness_stats": freshness_stats,
                         "focus_tags": topic_pack.get("tags", []),
                     } if timeline_events else None
-                    return index, deep_data_res, timeline_data_res
+                    return index, deep_data_res, timeline_data_res, topic_verified
                 except Exception as e:
                     trace_text = traceback.format_exc(limit=8)
                     print(f"⚠️ Consumer daily pipeline failed for {topic_label}: {trace_text}")
@@ -2144,7 +2235,8 @@ if not st.session_state.report_ready:
                         freshness_stats=freshness_stats,
                         focus_tags=topic_pack.get("tags", []),
                     )
-                    return index, deep_error, timeline_error
+                    deep_error["report_style"] = "consumer_daily"
+                    return index, deep_error, timeline_error, None
 
             results = []
             with st.spinner("🛰️ 消费电子日报探针已发射，正在聚合国内外重点科技新闻..."):
@@ -2164,14 +2256,36 @@ if not st.session_state.report_ready:
             results.sort(key=lambda item: item[0])
             all_deep_data = [item[1] for item in results if item[1] is not None]
             all_timeline_data = [item[2] for item in results if item[2] is not None]
+            verified_topics = [item[3] for item in results if len(item) > 3 and item[3] is not None]
+            verified_package = build_verified_news_package(
+                verified_topics,
+                current_dt.date(),
+                configured_time_window,
+            )
+            quality_report = validate_consumer_daily_quality(
+                verified_package,
+                min_events_per_topic=1,
+            )
+            quality_report_dict = dataclass_to_dict(quality_report)
+            for section in all_deep_data:
+                section["quality_report"] = quality_report_dict
+                if quality_report.warnings:
+                    existing_warnings = list(section.get("warnings", []) or [])
+                    section["warnings"] = existing_warnings + [
+                        warning for warning in quality_report.warnings if warning not in existing_warnings
+                    ]
+            for section in all_timeline_data:
+                section["quality_report"] = quality_report_dict
             runtime = build_run_metadata(
                 requested_provider=requested_search_provider,
                 resolved_provider=resolved_search_provider,
                 notices=list(search_notices or []),
                 diagnostics=get_search_diagnostics(),
             )
-            runtime["mode"] = "consumer_daily_today_strict"
-            runtime["strict_freshness_audit"] = True
+            runtime["mode"] = "consumer_daily_verified_events"
+            runtime["strict_freshness_audit"] = False
+            runtime["event_validation_quality_report"] = quality_report_dict
+            runtime["consumer_daily_time_window"] = configured_time_window
             return all_deep_data, all_timeline_data, ai.label, runtime
 
         if start_consumer_btn and active_consumer_search_provider:
@@ -2183,6 +2297,7 @@ if not st.session_state.report_ready:
                 resolved_search_provider=active_consumer_search_provider,
                 search_notices=consumer_search_notices,
                 resolved_search_settings=consumer_exa_settings,
+                configured_time_window=consumer_time_window,
             )
             if all_deep_data or all_timeline_data:
                 store_report_outputs(
