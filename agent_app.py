@@ -23,8 +23,13 @@ from tools.company_query_packs import (
     rank_results_by_company_pack,
 )
 from tools.consumer_daily_validation import (
+    CONSUMER_DAILY_MAX_EVENTS_PER_TOPIC,
+    CONSUMER_DAILY_MIN_CONFIRMED_OR_LIKELY,
+    CONSUMER_DAILY_MIN_EVENTS_PER_TOPIC,
+    CONSUMER_DAILY_TARGET_EVENTS_PER_TOPIC,
     build_verified_news_package,
     build_verified_topic_events,
+    build_topic_output,
     dataclass_to_dict,
     enrich_news_items_with_verified_events,
     event_blueprints_from_verified_topic,
@@ -161,8 +166,8 @@ CONSUMER_DAILY_EVENT_INPUT_LIMIT = 32
 CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT = 12
 CONSUMER_DAILY_CRAWL_URL_LIMIT = 14
 CONSUMER_DAILY_SOURCE_RESULT_LIMIT = 28
-CONSUMER_DAILY_MIN_NEWS_PER_TOPIC = 6
-CONSUMER_DAILY_MAX_NEWS_PER_TOPIC = 8
+CONSUMER_DAILY_MIN_NEWS_PER_TOPIC = CONSUMER_DAILY_MIN_EVENTS_PER_TOPIC
+CONSUMER_DAILY_MAX_NEWS_PER_TOPIC = CONSUMER_DAILY_TARGET_EVENTS_PER_TOPIC
 CONSUMER_DAILY_VERIFICATION_EVENT_LIMIT = 8
 CONSUMER_DAILY_VERIFICATION_QUERY_LIMIT = 5
 MAX_SOURCE_CHARS_PER_URL = 2400
@@ -2079,11 +2084,13 @@ if not st.session_state.report_ready:
                         deep_empty["report_style"] = "consumer_daily"
                         return index, deep_empty, timeline_empty, None
 
-                    def verification_search_fn(query, verification_topic_pack):
+                    def verification_search_fn(query, verification_topic_pack, search_time_window=None):
+                        expanded_window = search_time_window or topic_time_window
+                        expanded_timelimit = "w" if expanded_window in {"72h", "7d"} else "d"
                         return search_web(
                             query,
                             "",
-                            search_timelimit,
+                            expanded_timelimit,
                             max_results=10,
                             tavily_key=tavily_key,
                             provider=resolved_search_provider,
@@ -2099,15 +2106,26 @@ if not st.session_state.report_ready:
                         verification_search_fn=verification_search_fn,
                         max_initial_events=CONSUMER_DAILY_VERIFICATION_EVENT_LIMIT,
                         verification_queries_per_event=CONSUMER_DAILY_VERIFICATION_QUERY_LIMIT,
+                        min_events=CONSUMER_DAILY_MIN_EVENTS_PER_TOPIC,
+                        target_events=CONSUMER_DAILY_TARGET_EVENTS_PER_TOPIC,
                     )
-                    formal_events = topic_verified.confirmed_events + topic_verified.likely_events
+                    topic_output = build_topic_output(
+                        topic_verified,
+                        min_events=CONSUMER_DAILY_MIN_EVENTS_PER_TOPIC,
+                        target_events=CONSUMER_DAILY_TARGET_EVENTS_PER_TOPIC,
+                    )
+                    formal_events = topic_output.main_events
+                    watchlist_events = topic_output.watchlist_events
                     freshness_stats = {
                         "enabled": True,
                         "time_window": topic_verified.time_window,
                         "raw_count": len(raw_results or []),
                         "confirmed_events": len(topic_verified.confirmed_events),
                         "likely_events": len(topic_verified.likely_events),
+                        "main_events": len(formal_events),
+                        "watchlist_events": len(watchlist_events),
                         "rejected_or_weak_events": len(topic_verified.rejected_summary),
+                        "expansion_attempts": list(topic_verified.expansion_attempts or []),
                     }
 
                     if not formal_events:
@@ -2122,8 +2140,10 @@ if not st.session_state.report_ready:
                                 "report_style": "consumer_daily",
                                 "source_mode": "consumer_daily_verified_events",
                                 "verified_events": [],
+                                "watchlist_events": [dataclass_to_dict(event) for event in watchlist_events],
                                 "rejected_summary": [dataclass_to_dict(item) for item in topic_verified.rejected_summary[:12]],
                                 "search_provider": resolved_search_provider,
+                                "insufficient_reason": topic_output.insufficient_reason,
                             }
                         )
                         return index, deep_empty, timeline_empty, topic_verified
@@ -2142,8 +2162,9 @@ if not st.session_state.report_ready:
                     analysis_events = event_blueprints_from_verified_topic(
                         topic_verified,
                         limit=CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT,
+                        events=formal_events,
                     )
-                    analysis_results = raw_results_from_verified_topic(topic_verified)[:CONSUMER_DAILY_SOURCE_RESULT_LIMIT]
+                    analysis_results = raw_results_from_verified_topic(topic_verified, events=formal_events)[:CONSUMER_DAILY_SOURCE_RESULT_LIMIT]
                     verified_package = build_verified_news_package(
                         [topic_verified],
                         current_dt.date(),
@@ -2160,7 +2181,8 @@ if not st.session_state.report_ready:
                         event_blueprints=analysis_events,
                         source_mode="consumer_daily_verified_events",
                         guidance=(
-                            f"{daily_guidance}；本频道是每日消费电子日报，每个专题最多保留 {CONSUMER_DAILY_MAX_NEWS_PER_TOPIC} 条已验证事件。"
+                            f"{daily_guidance}；本频道是每日消费电子日报，每个专题原则上输出 {CONSUMER_DAILY_MIN_EVENTS_PER_TOPIC} 到 {CONSUMER_DAILY_TARGET_EVENTS_PER_TOPIC} 条主新闻，最多 {CONSUMER_DAILY_MAX_EVENTS_PER_TOPIC} 条。"
+                            "优先使用 confirmed，其次使用 likely；weak/watchlist 只能作为待跟踪线索，不得写成确定事实。"
                             "【事件】写清主体、产品/业务、动作、时间窗口和地区。"
                             "【为什么重要】要面向 FPC/PCB、光学显示、智能硬件和消费电子研发部门。"
                             "【已确认信息】必须优先写硬件参数、产品规格、销量/份额、价格、供应链环节、量产/订单/渠道。"
@@ -2200,7 +2222,9 @@ if not st.session_state.report_ready:
                                 "focus_tags": topic_pack.get("tags", []),
                                 "watch_entities": topic_pack.get("companies", []),
                                 "verified_events": [dataclass_to_dict(event) for event in formal_events],
+                                "watchlist_events": [dataclass_to_dict(event) for event in watchlist_events],
                                 "rejected_summary": [dataclass_to_dict(item) for item in topic_verified.rejected_summary[:12]],
+                                "insufficient_reason": topic_output.insufficient_reason,
                             }
 
                     timeline_events = [
@@ -2264,7 +2288,7 @@ if not st.session_state.report_ready:
             )
             quality_report = validate_consumer_daily_quality(
                 verified_package,
-                min_events_per_topic=1,
+                min_events_per_topic=CONSUMER_DAILY_MIN_CONFIRMED_OR_LIKELY,
             )
             quality_report_dict = dataclass_to_dict(quality_report)
             for section in all_deep_data:
