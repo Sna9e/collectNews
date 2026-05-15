@@ -168,14 +168,14 @@ EVENT_BLUEPRINT_INPUT_LIMIT_INDUSTRY = 16
 ANALYSIS_EVENT_LIMIT = 8
 COMPANY_CRAWL_URL_LIMIT = 10
 INDUSTRY_CRAWL_URL_LIMIT = 8
-CONSUMER_DAILY_EVENT_INPUT_LIMIT = 32
-CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT = 12
-CONSUMER_DAILY_CRAWL_URL_LIMIT = 14
-CONSUMER_DAILY_SOURCE_RESULT_LIMIT = 28
+CONSUMER_DAILY_EVENT_INPUT_LIMIT = 40
+CONSUMER_DAILY_ANALYSIS_EVENT_LIMIT = 14
+CONSUMER_DAILY_CRAWL_URL_LIMIT = 16
+CONSUMER_DAILY_SOURCE_RESULT_LIMIT = 36
 CONSUMER_DAILY_MIN_NEWS_PER_TOPIC = CONSUMER_DAILY_MIN_EVENTS_PER_TOPIC
 CONSUMER_DAILY_MAX_NEWS_PER_TOPIC = CONSUMER_DAILY_TARGET_EVENTS_PER_TOPIC
-CONSUMER_DAILY_VERIFICATION_EVENT_LIMIT = 8
-CONSUMER_DAILY_VERIFICATION_QUERY_LIMIT = 5
+CONSUMER_DAILY_VERIFICATION_EVENT_LIMIT = 10
+CONSUMER_DAILY_VERIFICATION_QUERY_LIMIT = 6
 MAX_SOURCE_CHARS_PER_URL = 2400
 DEFAULT_GEMINI_LIGHT_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_GEMINI_MAIN_MODEL = "gemini-2.5-flash-lite"
@@ -1994,7 +1994,7 @@ if not st.session_state.report_ready:
     with tab3:
         st.markdown(
             "💡 **本频道面向 FPC 制造商研发部门**：本轮固定使用 Exa 广度召回与 DeepSeek 生成，"
-            "重点跟踪消费电子、AR/VR/AI眼镜、AI、电动汽车、折叠屏与新型显示，并提高中国国内新闻权重。"
+            "重点跟踪消费电子、AR/VR/AI眼镜、AI、电动汽车、折叠屏与新型显示、机器人/具身智能，并提高中国国内新闻权重。"
         )
         consumer_search_provider = "exa"
         st.session_state.consumer_daily_search_provider = "exa"
@@ -2016,9 +2016,9 @@ if not st.session_state.report_ready:
             ["wide", "normal", "light"],
             key="consumer_daily_search_depth",
             format_func=lambda value: {
-                "light": "light：每专题约 8 条 query",
-                "normal": "normal：每专题约 15 条 query",
-                "wide": "wide：每专题约 20–30 条 query（默认）",
+                "light": "light：每专题约 18 条 query",
+                "normal": "normal：每专题约 36 条 query",
+                "wide": "wide：每专题约 60 条 query（默认）",
             }.get(value, value),
         )
         consumer_time_window = st.selectbox(
@@ -2035,7 +2035,7 @@ if not st.session_state.report_ready:
         st.caption("AI 一周资讯专题在默认 72h 设置下会自动放宽到 7d；正式 PPT 只进入 confirmed/likely 事件。")
         consumer_topics = get_all_consumer_topic_query_packs()
         st.caption(
-            "固定五专题 Topic Pack："
+            "固定六专题 Topic Pack："
             + "；".join([pack.topic_name for pack in consumer_topics])
         )
         consumer_sites = get_consumer_electronics_sites_text()
@@ -2079,7 +2079,7 @@ if not st.session_state.report_ready:
             mem_manager = GistMemoryManager(gh_token, gist_id)
             mem_manager.load_memory()
             reset_search_diagnostics()
-            st.info("🔎 正在启动五专题全流程追踪：Topic Pack → Exa → 时效审查 → 事件主档 → 原文抓取 → map-reduce → 多源验证。")
+            st.info("🔎 正在启动六专题全流程追踪：Topic Pack → Exa → 时效审查 → 事件主档 → 原文抓取 → map-reduce → 多源验证。")
             st.caption(f"本频道目标日期：{current_date_iso}；验证窗口：{configured_time_window}。AI 一周资讯默认可放宽到 7d。")
             for notice in ai_notices:
                 st.caption(notice)
@@ -2105,7 +2105,7 @@ if not st.session_state.report_ready:
                         exa_settings=resolved_search_settings,
                         query_suffix=query_suffix,
                         search_depth=search_depth,
-                        max_candidates=80 if search_depth == "wide" else (64 if search_depth == "normal" else 40),
+                        max_candidates=120 if search_depth == "wide" else (90 if search_depth == "normal" else 60),
                     )
                     raw_results, freshness_stats, freshness_warnings = filter_consumer_results_by_freshness(
                         raw_results,
