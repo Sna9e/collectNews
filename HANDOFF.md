@@ -1,5 +1,65 @@
 # HANDOFF.md
 
+## 0J. 2026-06-18 更新：频道四 PWG Streamlit 前端入口上线验证
+
+本次将已完成的 PWG 情报系统接入现有 Streamlit 前端，作为独立“频道四：PWG技术情报”。保持最小改动；没有修改频道一、频道二、频道三的处理链路，没有修改 `tools/search_engine.py` 接口行为，也没有把 PWG 输出混入原有 Word/PPT 报告状态机。
+
+已完成：
+- `agent_app.py`
+  - 将首页 tab 从 3 个扩展为 4 个，新增 `🧪 频道四：PWG技术情报`。
+  - 频道四调用现有 `pwg_intelligence.collector.collect_pwg_daily_scan()`，固定使用 Exa，不调用 Tavily。
+  - 支持设置 query 数、每 query 结果数、回溯天数、报告日期和是否写入 `pwg_intelligence.xlsx`。
+  - 支持一键执行 daily_scan 并生成日报/周报。
+  - 支持基于最近 raw JSON 重新生成日报/周报，不重新消耗搜索额度。
+  - 前端显示 Raw 结果数、过滤后数量、分类评分数量、人工复核数量和周报机会数。
+  - 前端提供 Raw JSON、Raw Excel、PWG Excel、日报 Markdown、周报 Markdown 下载入口。
+- `pwg_intelligence/reporter.py`
+  - 报告层新增英文摘要中文化展示逻辑。原始 `factual_summary` 仍保留在 JSON/Excel 中，日报/周报展示时优先输出中文事实句。
+  - 对英文摘要提取技术关键词和明确数字，例如 `Micro LED`、`CPO`、`USD 848 million`、`2030`，避免直接把英文 Exa 摘要原句写入中文报告。
+- `PLANS.md`
+  - 标记频道四前端入口和前端真实跑通完成。
+
+本地真实前端验证：
+- 启动临时 Streamlit：`http://127.0.0.1:8504`。
+- 浏览器确认 `🧪 频道四：PWG技术情报` tab 可见，内容区、执行按钮和重建按钮可见，无导入错误。
+- 前端按钮触发真实 Exa daily_scan：
+  - query 数：10。
+  - 每 query 结果数：6。
+  - 回溯：7 天。
+  - Raw 结果：60 条。
+  - 过滤后：40 条。
+  - 分类评分：34 条。
+  - 人工复核：32 条。
+- 前端重建报告按钮验证：
+  - 可基于最近 raw JSON 重新生成日报和周报。
+  - Raw/过滤/分类统计能正确回填，不再显示 0。
+
+本次输出：
+- `data/pwg_intelligence/raw/daily_scan_2026-06-18.json`
+- `data/pwg_intelligence/raw/daily_scan_2026-06-18.xlsx`
+- `data/pwg_intelligence/pwg_intelligence.xlsx`
+- `data/pwg_intelligence/reports/PWG_daily_brief_2026-06-18.md`
+- `data/pwg_intelligence/reports/PWG_weekly_review_2026-W25.md`
+
+已执行验证：
+- `python -m py_compile agent_app.py pwg_intelligence\reporter.py`
+- `python -m py_compile agent_app.py pwg_intelligence\__init__.py pwg_intelligence\models.py pwg_intelligence\excel_store.py pwg_intelligence\collector.py pwg_intelligence\classifier.py pwg_intelligence\pwg_source_policy.py pwg_intelligence\pwg_scoring.py pwg_intelligence\reporter.py tools\pwg_query_packs.py`
+- `python tests\test_pwg_intelligence_phase1.py`
+- `python tests\test_pwg_query_packs.py`
+- `python tests\test_pwg_collector.py`
+- `python tests\test_pwg_phase4_rules.py`
+- `python tests\test_pwg_reports.py`
+
+验证说明：
+- 本机未安装 `pytest`，因此按项目现有方式直接执行测试脚本。
+- 本次前端入口没有调用 DeepSeek；DeepSeek 仍用于离线质量复核，不进入频道四前端 daily_scan 主流程。
+- 本次没有调用 Tavily。
+
+剩余风险：
+- 当前 PWG 前端仍是第一版操作台，没有用户权限、历史批次对比和 Excel 增量合并。
+- `pwg_intelligence.xlsx` 仍按现有写入逻辑重建 DEMO 骨架 + 本轮入选行，尚未实现历史正式数据增量合并。
+- 报告中文化摘要是规则化展示，不是 LLM 翻译；复杂英文标题仍可能保留产品名、机构名和英文技术术语。
+
 ## 0I. 2026-06-09 更新：PWG 本地 Exa + DeepSeek 真实输出验证与改进
 
 本次按要求使用本地 `.streamlit/secrets.toml` 中的 `EXA_API_KEY` 和 `DEEPSEEK_API_KEY` 做了一轮真实验证。没有打印或泄露密钥；没有修改频道一、频道二、频道三，也没有改 `tools/search_engine.py` 接口行为。

@@ -68,6 +68,18 @@ from tools.search_engine import (
     text_mentions_local_day,
     verify_selected_news_by_title_search,
 )
+from pwg_intelligence.collector import (
+    DEFAULT_RAW_DIR as PWG_DEFAULT_RAW_DIR,
+    collect_pwg_daily_scan,
+)
+from pwg_intelligence.excel_store import DEFAULT_WORKBOOK_PATH as PWG_DEFAULT_WORKBOOK_PATH
+from pwg_intelligence.reporter import (
+    DEFAULT_REPORT_DIR as PWG_DEFAULT_REPORT_DIR,
+    find_latest_raw_json,
+    load_classified_rows_from_json,
+    write_daily_brief,
+    write_weekly_review,
+)
 
 _LOCAL_DOTENV_CACHE = None
 _LOCAL_SECRET_CACHE = None
@@ -1517,10 +1529,11 @@ with st.sidebar:
 st.title("🧠 商业情报战情室（事件主档统一版）")
 
 if not st.session_state.report_ready:
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📚 频道一：公司追踪（带金融量化）",
         "🌐 频道二：每日宏观行业早报（全域扫描）",
         "📱 频道三：科技消费电子日报",
+        "🧪 频道四：PWG技术情报",
     ])
 
     with tab1:
@@ -2484,6 +2497,267 @@ if not st.session_state.report_ready:
                 st.error("本次运行没有产出任何有效专题。请查看终端日志，或使用本地调试版查看详细报错。")
         elif start_consumer_btn and not active_consumer_search_provider:
             st.error("频道三当前只使用 Exa。请配置 EXA_API_KEY；Tavily 不再作为频道三默认或自动回退。")
+
+    with tab4:
+        st.markdown(
+            "💡 **频道四：PWG 聚合物光波导技术与产品情报系统**。"
+            "本频道使用独立 `pwg_intelligence/` 模块，复用 Exa 搜索，不写入频道一/三的报告流程。"
+        )
+        st.caption(
+            "输出位置："
+            f"原始结果 `{PWG_DEFAULT_RAW_DIR}`；"
+            f"情报数据库 `{PWG_DEFAULT_WORKBOOK_PATH}`；"
+            f"日报/周报 `{PWG_DEFAULT_REPORT_DIR}`。"
+        )
+        st.caption("DeepSeek 当前仅用于离线质量复核；本前端入口的采集、分类、评分和报告生成不新增大模型调用。")
+
+        pwg_col1, pwg_col2, pwg_col3, pwg_col4 = st.columns(4)
+        with pwg_col1:
+            pwg_max_queries = st.number_input(
+                "PWG query 数",
+                min_value=3,
+                max_value=42,
+                value=10,
+                step=1,
+                key="pwg_max_queries",
+            )
+        with pwg_col2:
+            pwg_results_per_query = st.number_input(
+                "每条 query 结果数",
+                min_value=3,
+                max_value=20,
+                value=6,
+                step=1,
+                key="pwg_results_per_query",
+            )
+        with pwg_col3:
+            pwg_lookback_days = st.number_input(
+                "回溯天数",
+                min_value=1,
+                max_value=30,
+                value=7,
+                step=1,
+                key="pwg_lookback_days",
+            )
+        with pwg_col4:
+            pwg_report_date = st.date_input(
+                "报告日期",
+                value=datetime.datetime.now(LOCAL_TZ).date(),
+                key="pwg_report_date",
+            )
+
+        pwg_write_workbook = st.toggle(
+            "写入 PWG Excel 数据库",
+            value=True,
+            key="pwg_write_workbook",
+            help="关闭后仍会生成 raw JSON、raw Excel、日报和周报，但不覆盖 pwg_intelligence.xlsx。",
+        )
+
+        pwg_run_col1, pwg_run_col2 = st.columns(2)
+        run_pwg_scan = pwg_run_col1.button(
+            "🧪 执行频道四每日采集并生成报告",
+            type="primary",
+            use_container_width=True,
+            key="btn_pwg_daily_scan",
+        )
+        rebuild_pwg_reports = pwg_run_col2.button(
+            "♻️ 基于最近 raw JSON 重新生成报告",
+            use_container_width=True,
+            key="btn_pwg_rebuild_reports",
+        )
+
+        def render_pwg_download(label, path, mime, key):
+            if not path:
+                return
+            file_path = Path(path)
+            if file_path.is_file():
+                with file_path.open("rb") as file_obj:
+                    st.download_button(
+                        label,
+                        file_obj,
+                        file_name=file_path.name,
+                        mime=mime,
+                        key=key,
+                        use_container_width=True,
+                    )
+
+        def render_pwg_markdown_preview(label, path):
+            if not path:
+                return
+            file_path = Path(path)
+            if not file_path.is_file():
+                return
+            with st.expander(label, expanded=False):
+                st.markdown(file_path.read_text(encoding="utf-8")[:5000])
+
+        if run_pwg_scan:
+            if not exa_key:
+                st.error("频道四需要 EXA_API_KEY。请先在 `.streamlit/secrets.toml` 或环境变量中配置。")
+            else:
+                with st.spinner("正在执行 PWG daily_scan、规则分类、机会评分和日报/周报生成..."):
+                    try:
+                        pwg_payload = collect_pwg_daily_scan(
+                            mode="daily_scan",
+                            max_queries=int(pwg_max_queries),
+                            results_per_query=int(pwg_results_per_query),
+                            lookback_days=int(pwg_lookback_days),
+                            provider="exa",
+                            tavily_key="",
+                            exa_key=exa_key,
+                            output_dir=PWG_DEFAULT_RAW_DIR,
+                            workbook_path=PWG_DEFAULT_WORKBOOK_PATH,
+                            write_workbook=bool(pwg_write_workbook),
+                        )
+                        pwg_rows = list(pwg_payload.get("classified_rows") or [])
+                        pwg_daily_path = write_daily_brief(
+                            pwg_rows,
+                            report_date=pwg_report_date,
+                            output_dir=PWG_DEFAULT_REPORT_DIR,
+                        )
+                        pwg_weekly_result = write_weekly_review(
+                            pwg_rows,
+                            end_date=pwg_report_date,
+                            output_dir=PWG_DEFAULT_REPORT_DIR,
+                            workbook_path=PWG_DEFAULT_WORKBOOK_PATH,
+                            update_workbook=bool(pwg_write_workbook),
+                        )
+                        st.session_state.pwg_last_run = {
+                            **pwg_payload,
+                            "output_daily_markdown": str(pwg_daily_path),
+                            "output_weekly_markdown": pwg_weekly_result.get("output_markdown", ""),
+                            "weekly_opportunity_count": pwg_weekly_result.get("opportunity_count", 0),
+                            "output_workbook": pwg_weekly_result.get("output_workbook") or pwg_payload.get("output_workbook", ""),
+                        }
+                        st.success("频道四采集与报告生成完成。")
+                    except Exception as exc:
+                        st.error(f"频道四运行失败：{exc.__class__.__name__}: {exc}")
+                        st.exception(exc)
+
+        if rebuild_pwg_reports:
+            latest_json = find_latest_raw_json(PWG_DEFAULT_RAW_DIR)
+            if not latest_json:
+                st.error("未找到可复用的 PWG raw JSON，请先执行一次频道四每日采集。")
+            else:
+                with st.spinner(f"正在基于 {latest_json.name} 重新生成 PWG 日报和周报..."):
+                    try:
+                        with Path(latest_json).open("r", encoding="utf-8") as file_obj:
+                            latest_payload = json.load(file_obj)
+                        pwg_rows = load_classified_rows_from_json(latest_json)
+                        pwg_daily_path = write_daily_brief(
+                            pwg_rows,
+                            report_date=pwg_report_date,
+                            output_dir=PWG_DEFAULT_REPORT_DIR,
+                        )
+                        pwg_weekly_result = write_weekly_review(
+                            pwg_rows,
+                            end_date=pwg_report_date,
+                            output_dir=PWG_DEFAULT_REPORT_DIR,
+                            workbook_path=PWG_DEFAULT_WORKBOOK_PATH,
+                            update_workbook=bool(pwg_write_workbook),
+                        )
+                        latest_xlsx = Path(latest_json).with_suffix(".xlsx")
+                        st.session_state.pwg_last_run = {
+                            "mode": "daily_scan",
+                            "dry_run": False,
+                            "search_provider": latest_payload.get("search_provider", ""),
+                            "raw_result_count": latest_payload.get("raw_result_count", 0),
+                            "kept_count": latest_payload.get("kept_count", 0),
+                            "manual_review_list": latest_payload.get("manual_review_list", []),
+                            "rule_coverage": latest_payload.get("rule_coverage", {}),
+                            "output_json": str(latest_json),
+                            "output_xlsx": str(latest_xlsx) if latest_xlsx.is_file() else "",
+                            "classified_count": len(pwg_rows),
+                            "classified_rows": pwg_rows,
+                            "output_daily_markdown": str(pwg_daily_path),
+                            "output_weekly_markdown": pwg_weekly_result.get("output_markdown", ""),
+                            "weekly_opportunity_count": pwg_weekly_result.get("opportunity_count", 0),
+                            "output_workbook": pwg_weekly_result.get("output_workbook", ""),
+                        }
+                        st.success("已基于最近 raw JSON 重新生成频道四日报和周报。")
+                    except Exception as exc:
+                        st.error(f"频道四报告重建失败：{exc.__class__.__name__}: {exc}")
+                        st.exception(exc)
+
+        pwg_last_run = st.session_state.get("pwg_last_run")
+        if pwg_last_run:
+            pwg_metrics = st.columns(5)
+            pwg_metrics[0].metric("Raw 结果", int(pwg_last_run.get("raw_result_count", 0) or 0))
+            pwg_metrics[1].metric("过滤后", int(pwg_last_run.get("kept_count", 0) or 0))
+            pwg_metrics[2].metric("已分类评分", int(pwg_last_run.get("classified_count", 0) or 0))
+            pwg_metrics[3].metric("人工复核", len(pwg_last_run.get("manual_review_list") or []))
+            pwg_metrics[4].metric("周报机会", int(pwg_last_run.get("weekly_opportunity_count", 0) or 0))
+
+            st.markdown("#### 输出文件")
+            output_paths = {
+                "Raw JSON": pwg_last_run.get("output_json", ""),
+                "Raw Excel": pwg_last_run.get("output_xlsx", ""),
+                "PWG Excel 数据库": pwg_last_run.get("output_workbook", "") or str(PWG_DEFAULT_WORKBOOK_PATH),
+                "日报 Markdown": pwg_last_run.get("output_daily_markdown", ""),
+                "周报 Markdown": pwg_last_run.get("output_weekly_markdown", ""),
+            }
+            for label, path in output_paths.items():
+                if path:
+                    st.caption(f"{label}: `{path}`")
+
+            download_cols = st.columns(5)
+            with download_cols[0]:
+                render_pwg_download(
+                    "下载 Raw JSON",
+                    pwg_last_run.get("output_json", ""),
+                    "application/json",
+                    "download_pwg_raw_json",
+                )
+            with download_cols[1]:
+                render_pwg_download(
+                    "下载 Raw Excel",
+                    pwg_last_run.get("output_xlsx", ""),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "download_pwg_raw_xlsx",
+                )
+            with download_cols[2]:
+                render_pwg_download(
+                    "下载 PWG Excel",
+                    pwg_last_run.get("output_workbook", "") or str(PWG_DEFAULT_WORKBOOK_PATH),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "download_pwg_workbook",
+                )
+            with download_cols[3]:
+                render_pwg_download(
+                    "下载日报",
+                    pwg_last_run.get("output_daily_markdown", ""),
+                    "text/markdown",
+                    "download_pwg_daily_md",
+                )
+            with download_cols[4]:
+                render_pwg_download(
+                    "下载周报",
+                    pwg_last_run.get("output_weekly_markdown", ""),
+                    "text/markdown",
+                    "download_pwg_weekly_md",
+                )
+
+            render_pwg_markdown_preview("预览 PWG 日报", pwg_last_run.get("output_daily_markdown", ""))
+            render_pwg_markdown_preview("预览 PWG 周报", pwg_last_run.get("output_weekly_markdown", ""))
+
+            pwg_rows_preview = list(pwg_last_run.get("classified_rows") or [])
+            if pwg_rows_preview:
+                preview_fields = [
+                    "title",
+                    "source_name",
+                    "source_level",
+                    "pwg_category",
+                    "maturity_level",
+                    "opportunity_score",
+                    "needs_manual_review",
+                ]
+                st.dataframe(
+                    [
+                        {field: row.get(field, "") for field in preview_fields}
+                        for row in pwg_rows_preview[:30]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
 else:
     if not st.session_state.report_celebrated:
