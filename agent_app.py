@@ -66,6 +66,7 @@ from tools.search_engine import (
     search_consumer_daily,
     search_web,
     text_mentions_local_day,
+    verify_selected_news_by_title_search,
 )
 
 _LOCAL_DOTENV_CACHE = None
@@ -1139,6 +1140,7 @@ def render_timeline_preview(timeline_data):
             date_text = html.escape(str(get_value(event, "date", "近期")))
             event_text = html.escape(str(get_value(event, "event", "未命名事件")))
             source_text = html.escape(str(get_value(event, "source", "未知来源")))
+            summary_text = html.escape(str(get_value(event, "event_summary", "") or ""))
             appears_later = bool(get_value(event, "appears_in_later_news", False))
             matched_title = html.escape(str(get_value(event, "matched_news_title", "")))
             match_reason = html.escape(str(get_value(event, "match_reason", "")))
@@ -1168,6 +1170,12 @@ def render_timeline_preview(timeline_data):
                     f"<div style='margin-top:4px;color:#0f766e;'><strong>历史追踪：</strong>"
                     f"首次记录 {first_seen or '未知'}，累计追踪 {max(seen_count, 1)} 次</div>"
                 )
+            summary_html = ""
+            if summary_text:
+                summary_html = (
+                    "<div style='margin-top:6px;color:#1f4e79;line-height:1.55;'>"
+                    f"{summary_text}</div>"
+                )
 
             detail_html = ""
             if appears_later:
@@ -1185,6 +1193,7 @@ def render_timeline_preview(timeline_data):
                     "padding:12px 14px;margin:10px 0;border-radius:10px;'>"
                     f"<div style='font-weight:700;color:#0f172a;'>[{date_text}] {event_text}{badge_html}</div>"
                     f"<div style='margin-top:4px;color:#475569;'>来源：{source_text}</div>"
+                    f"{summary_html}"
                     f"{history_html}"
                     f"{detail_html}"
                     "</div>"
@@ -1629,6 +1638,22 @@ if not st.session_state.report_ready:
                     if final_news_list:
                         deduped_news = dedupe_news_items(final_news_list)
                         if deduped_news:
+                            deduped_news, title_review_warnings = verify_selected_news_by_title_search(
+                                deduped_news,
+                                topic,
+                                time_limit_dict[time_opt],
+                                tavily_key=tavily_key,
+                                provider=active_search_provider,
+                                exa_key=exa_key,
+                                exa_settings=exa_search_settings,
+                                now=current_dt,
+                            )
+                            crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(title_review_warnings)
+                        if len(deduped_news or []) < 2:
+                            shortage_warning = "在设定时间范围内，未检索到足够多可核实且具有信息增量的高质量新闻。"
+                            if shortage_warning not in crawl_result["warnings"]:
+                                crawl_result["warnings"].append(shortage_warning)
+                        if deduped_news:
                             finance_data = {}
                             if enable_finance_chain:
                                 try:
@@ -1646,6 +1671,7 @@ if not st.session_state.report_ready:
                             deep_data_res = {
                                 "topic": topic,
                                 "data": deduped_news,
+                                "report_style": "company_tracking",
                                 "finance": finance_data,
                                 "source_mode": crawl_result["source_mode"],
                                 "crawler_valid_count": crawl_result["valid_count"],
@@ -1656,10 +1682,24 @@ if not st.session_state.report_ready:
                             }
                             if new_insight:
                                 mem_manager.add_topic_memory(topic, current_date_str, new_insight)
+                        else:
+                            deep_data_res = {
+                                "topic": topic,
+                                "data": [],
+                                "report_style": "company_tracking",
+                                "finance": {},
+                                "source_mode": crawl_result["source_mode"],
+                                "crawler_valid_count": crawl_result["valid_count"],
+                                "warnings": list(crawl_result.get("warnings", [])),
+                                "extraction_stats": crawl_result.get("stats", {}),
+                                "freshness_stats": freshness_stats,
+                                "focus_tags": focus_tags,
+                            }
 
                     timeline_data_res = {
                         "topic": topic,
                         "events": timeline_events,
+                        "report_style": "company_tracking",
                         "warnings": list(crawl_result.get("warnings", [])),
                         "extraction_stats": crawl_result.get("stats", {}),
                         "freshness_stats": freshness_stats,

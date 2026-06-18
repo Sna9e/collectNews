@@ -9,3 +9,5 @@ mplfinance
 pandas
 matplotlib
 requests
+xlsxwriter
+pyyaml

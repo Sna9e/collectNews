@@ -1,0 +1,430 @@
+[
+  {
+    "topic": "Apple",
+    "raw": 28,
+    "fresh": 27,
+    "ranked": 25,
+    "timeline_count": 8,
+    "news_before_title_gate": 4,
+    "news_count": 3,
+    "warnings": [
+      "时效审查已启用：原始 28 条，保留 27 条，剔除 0 条超窗新闻、1 条缺时间戳新闻、0 条时间异常新闻。",
+      "样例：缺少可解析时间戳：Siri update, AI take center stage at Apple's WWDC",
+      "标题二次审查剔除第4条详细新闻（event_id=E06）：窗口内搜索结果与标题不匹配；搜索 13 条，时效保留 13 条。"
+    ],
+    "timeline": [
+      {
+        "event_id": "E01",
+        "date": "06月04日",
+        "source": "macrumors.com",
+        "event": "苹果将揭示AI策略与自研芯片",
+        "event_summary": "据The Information报道，Apple计划在WWDC 2026上展示其AI策略的独特之处，强调自研芯片在设备端处理AI查询的优势。公司预计将演示iPhone、Apple Watch和Mac芯片如何为AI任务提供边缘计算能力，区别于依赖云端的竞争对手。",
+        "source_url": "https://www.macrumors.com/2026/06/04/apple-to-reveal-what-makes-its-ai-different/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E02",
+        "date": "06月05日",
+        "source": "9to5mac.com",
+        "event": "iOS 27或需加入候补名单",
+        "event_summary": "据Bloomberg报道，Apple即将在WWDC上发布的iOS 27新版Siri可能设有候补名单，用户需排队才能体验新功能。此前消息称，新版Siri将支持更自然的对话和个性化上下文理解。",
+        "source_url": "https://9to5mac.com/2026/06/05/ios-27-you-might-have-to-join-a-waitlist-to-try-new-siri-features/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E03",
+        "date": "06月07日",
+        "source": "thestar.com.my",
+        "event": "苹果AI战略与Siri升级前瞻",
+        "event_summary": "Apple将于6月8日在WWDC 2026上发布全新AI战略，包括大幅升级的Siri数字助手和一系列新AI功能。此次发布被视为两年前首次AI推出后因技术不佳和功能延迟而进行的补救。",
+        "source_url": "https://www.thestar.com.my/tech/tech-news/2026/06/07/what-to-expect-from-apples-ai-siri-and-ios-27-launch-at-wwdc",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E04",
+        "date": "06月08日",
+        "source": "apple.com",
+        "event": "苹果推出Siri AI与iOS 27 Beta",
+        "event_summary": "Apple在WWDC 2026上正式发布Siri AI，这是一款由Apple Intelligence驱动的全新Siri版本，具备个人上下文理解、屏幕感知和更强大的对话能力。同时推出iOS 27，包含Siri独立应用、Liquid Glass外观调整等12项新功能。开发者Beta版即日可用。",
+        "source_url": "https://www.apple.com/newsroom/2026/06/apple-introduces-siri-ai-a-profoundly-more-capable-and-personal-assistant/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E05",
+        "date": "06月08日",
+        "source": "otontechnology.com",
+        "event": "WWDC 2026：苹果Siri大改版",
+        "event_summary": "Apple在WWDC 2026上宣布与Google达成约每年10亿美元的协议，Siri AI将基于Google Gemini模型构建。新版Siri支持聊天模式、个人数据访问、独立应用，并允许用户切换使用Claude或ChatGPT。该功能随iOS 27于9月正式推出。",
+        "source_url": "https://otontechnology.com/apple-rebuilt-siri-google-gemini-ios-27/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E06",
+        "date": "06月08日",
+        "source": "bbc.com",
+        "event": "苹果发布Siri AI全面革新",
+        "event_summary": "Apple CEO Tim Cook在WWDC 2026上发表了作为首席执行官的最后一届主题演讲，宣布Siri AI重大升级。Cook将于9月1日卸任，由John Ternus接替。此次发布会也标志着Apple在AI领域的重大转折。",
+        "source_url": "https://www.bbc.com/news/articles/cnv9dr996v8o",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E07",
+        "date": "06月08日",
+        "source": "apple.com",
+        "event": "苹果智能带来强大AI与隐私保护",
+        "event_summary": "Apple在WWDC 2026上推出下一代Apple Intelligence，采用全新架构，将最新Apple基础模型深度集成到平台中，并注重隐私保护。新功能涵盖iPhone、iPad和Mac上的日常应用体验。",
+        "source_url": "https://www.apple.com/newsroom/2026/06/apple-intelligence-brings-powerful-ai-capabilities-into-everyday-experiences/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E08",
+        "date": "06月07日",
+        "source": "macrumors.com",
+        "event": "可折叠iPhone设计模型首曝",
+        "event_summary": "Sonny Dickson 了可折叠iPhone的详细模型图片，展示了最终设计，并暗示该设备可能仅提供白色版本。模型为展示用途，供配件制造商参考。",
+        "source_url": "https://www.macrumors.com/2026/06/07/best-look-yet-at-foldable-iphone-design-revealed/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      }
+    ],
+    "news": [
+      {
+        "title": "WWDC 2026前瞻：苹果AI、Siri与iOS 27发布预期",
+        "source": "thestar.com.my",
+        "date": "06月07日",
+        "url": "https://www.thestar.com.my/tech/tech-news/2026/06/07/what-to-expect-from-apples-ai-siri-and-ios-27-launch-at-wwdc",
+        "summary": "【事件核心】苹果公司于6月8日在WWDC 2026上发布全新AI战略，旨在弥补两年前首次AI推出时技术不佳和功能延迟的缺陷。此次发布包括大幅升级的Siri数字助手和一系列新AI功能，以及iOS 27、iPadOS 27、macOS 27等操作系统更新。与2025年注重Liquid Glass界面设计的更新不同，2026年的操作系统将更侧重于提升软件的可靠性和响应速度，包括更长的电池续航和更快的性能，同时融入更多AI功能。\n\n【深度细节/数据支撑】苹果还在为商业用户和新兴市场（如印度、印度尼西亚、马来西亚和东南亚其他地区）开发更多功能。新版iPhone软件将包含支持今年晚些时候推出的可折叠iPhone界面的底层变化。此次更新标志着苹果从追求设计创新转向提升基础体验和AI集成，类似于2009年的Mac OS X Snow Leopard和2018年的iOS 12。\n\n【行业深远影响】此次更新有助于苹果在竞争激烈的AI市场中重新确立地位，并拓展新兴市场。通过提升软件可靠性和AI集成，苹果有望吸引更多商业用户和新兴市场用户，从而推动增长。",
+        "summary_chars": 472,
+        "sentence_count": 8,
+        "forbidden_summary": false
+      },
+      {
+        "title": "苹果在WWDC 2026上推出Siri AI与iOS 27 Beta",
+        "source": "Apple Newsroom",
+        "date": "06月08日",
+        "url": "https://www.apple.com/newsroom/2026/06/apple-introduces-siri-ai-a-profoundly-more-capable-and-personal-assistant/",
+        "summary": "【事件核心】苹果在WWDC 2026上正式发布Siri AI，这是一款由Apple Intelligence驱动的全新Siri版本，具备个人上下文理解、屏幕感知和更强大的对话能力。同时推出iOS 27，包含Siri独立应用、Liquid Glass外观调整等12项新功能。开发者Beta版即日可用，正式版将于9月推出。Siri AI基于Apple Intelligence的全新架构，深度集成Apple基础模型，并注重隐私保护。新功能涵盖iPhone、iPad、Mac、Apple Watch、AirPods和Apple Vision Pro等设备。用户可通过语音或文字与Siri交互，并支持切换使用Claude或ChatGPT。\n\n【深度细节/数据支撑】Siri AI能够从用户的个人消息、邮件、照片等中提取相关信息，并具备广泛的全球知识，可回答几乎任何主题的问题。新架构注重隐私保护，采用下一代Apple Intelligence技术。功能包括专用应用、增强的视觉智能体验和集成写作工具。Siri AI在iOS 27中拥有更强大的功能：支持自然语言对话，可编辑和撰写邮件、文本和文档；提供下一代AI图像处理，可创建逼真壁纸和联系人海报；Image Playground功能可生成系统级背景；隐私保护方面，Siri AI确保个人数据安全，并可一键更新泄露密码。苹果官方YouTube频道发布的视频显示，Siri AI以全新界面亮相，并设有独立应用。\n\n【行业深远影响】此次发布标志着苹果在AI领域的重大转折，旨在弥补两年前首次AI推出时的不足。Siri AI的升级将显著提升用户体验，并可能改变智能助手市场的竞争格局。同时，苹果与Google达成约每年10亿美元的协议，Siri AI基于Google Gemini模型构建，显示苹果在AI合作上的开放态度。此次合作可能引发反垄断关注，但也为Siri带来了更强大的能力，有望提升用户对苹果AI生态的信心。",
+        "summary_chars": 827,
+        "sentence_count": 15,
+        "forbidden_summary": false
+      },
+      {
+        "title": "WWDC 2026：苹果Siri大改版基于Google Gemini",
+        "source": "otontechnology.com",
+        "date": "06月08日",
+        "url": "https://otontechnology.com/apple-rebuilt-siri-google-gemini-ios-27/",
+        "summary": "【事件核心】苹果在WWDC 2026上宣布与Google达成约每年10亿美元的协议，Siri AI将基于Google Gemini模型构建。新版Siri支持聊天模式、个人数据访问、独立应用，并允许用户切换使用Claude或ChatGPT。该功能随iOS 27于9月正式推出。苹果强调其使用了自有的Apple Foundation模型作为基础，但核心AI能力来自Google Gemini。这一合作标志着苹果在AI领域的重大战略转变，从自研模型转向与外部巨头合作。\n\n【深度细节/数据支撑】据otontechnology.com报道，苹果与Google的协议金额约为每年10亿美元，Siri AI基于Google Gemini模型，但苹果强调其使用了自有的Apple Foundation模型作为基础。新版Siri支持真正的来回对话、个人上下文理解、屏幕感知和应用内操作。用户还可以选择使用Claude或ChatGPT作为替代模型。iOS 27将包含Siri独立应用、Liquid Glass外观调整等12项新功能，开发者Beta版即日可用，正式版将于9月推出。\n\n【行业深远影响】此次合作标志着苹果在AI领域的重大战略转变，从自研模型转向与外部巨头合作，可能重塑AI助手市场格局。同时，苹果与Google的深度绑定可能引发反垄断关注，但也为Siri带来了更强大的能力，有望提升用户对苹果AI生态的信心。分析师指出，苹果必须证明其以隐私为先、集成优先的方法能带来更好的日常体验，而不仅仅是与对手持平。",
+        "summary_chars": 649,
+        "sentence_count": 12,
+        "forbidden_summary": false
+      }
+    ]
+  },
+  {
+    "topic": "Google",
+    "raw": 28,
+    "fresh": 26,
+    "ranked": 26,
+    "timeline_count": 8,
+    "news_before_title_gate": 3,
+    "news_count": 2,
+    "warnings": [
+      "时效审查已启用：原始 28 条，保留 26 条，剔除 2 条超窗新闻、0 条缺时间戳新闻、0 条时间异常新闻。",
+      "样例：超出窗口 171.7h：Google's June Android Drop is here and it hands the Pixel a scam detection feature the iPhone lacks - PhoneArena；超出窗口 171.7h：Google fixes one actively exploited Android zero-day, 124 flaws",
+      "标题二次审查剔除第1条详细新闻（event_id=E06）：窗口内搜索结果与标题不匹配；搜索 9 条，时效保留 9 条。"
+    ],
+    "timeline": [
+      {
+        "event_id": "E01",
+        "date": "06月02日",
+        "source": "blog.google",
+        "event": "谷歌发布六月Android Drop更新",
+        "event_summary": "Google于6月2日发布六月Android Drop，带来多项新功能，包括Google Photos中的穿搭规划、虚假来电检测、Quick Share与AirDrop的扩展兼容性，以及Play Books的AI功能。同时预告Android 17即将于夏季推出，支持Pixel 6及以上设备。",
+        "source_url": "https://blog.google/products-and-platforms/platforms/android/android-drop-june-2026/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E02",
+        "date": "06月02日",
+        "source": "techrepublic.com",
+        "event": "谷歌修复安卓零日漏洞",
+        "event_summary": "Google在6月2日发布2026年6月安卓安全更新，修复了数十个漏洞，包括一个已被野外利用的框架漏洞和多个关键系统漏洞。此次更新旨在提升安卓系统的安全性，防止潜在攻击。",
+        "source_url": "https://www.techrepublic.com/article/news-google-june-2026-android-security-update/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E03",
+        "date": "06月03日",
+        "source": "developers.googleblog.com",
+        "event": "谷歌推出Gemma 4 12B多模态模型",
+        "event_summary": "Google于6月3日发布Gemma 4 12B模型，这是一个密集多模态模型，采用统一的编码器无关架构。该模型基于Gemma系列，旨在为开发者提供更强大的AI推理和生成能力，支持图像和文本等多种输入。",
+        "source_url": "https://developers.googleblog.com/en/gemma-4-12b-the-developer-guide/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E04",
+        "date": "06月04日",
+        "source": "searchenginejournal.com",
+        "event": "谷歌CEO称AI模式不影响经典搜索",
+        "event_summary": "Google CEO Sundar Pichai在6月4日接受采访时表示，他接受AI模式取代经典搜索的趋势，并强调AI答案中仍会包含来源和链接。Pichai指出，Google将通过 和广告的组合模式实现盈利，适应搜索行为的转变。",
+        "source_url": "https://www.searchenginejournal.com/googles-ceo-is-comfortable-with-ai-mode-replacing-classic-search/577923/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E05",
+        "date": "06月04日",
+        "source": "androidauthority.com",
+        "event": "谷歌Chrome新增浮动搜索栏",
+        "event_summary": "Google于6月4日被曝正在Chrome Canary中测试一个浮动搜索栏，可通过键盘快捷键调用，无需打开浏览器即可搜索。该搜索栏集成AI模式，支持文件上传和AI图像生成，但目前仍处于早期原型阶段，不确定是否会推向稳定版。",
+        "source_url": "https://www.androidauthority.com/chrome-floating-ai-mode-search-bar-3674318/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E06",
+        "date": "06月05日",
+        "source": "9to5google.com",
+        "event": "谷歌测试Chrome AI模式搜索",
+        "event_summary": "Google在6月5日被曝正在Chrome中测试一项新标志，启用后可将用户直接引导至AI模式，绕过标准搜索体验。但Google副总裁Rajan Patel随后澄清，该设置是意外出现在Canary构建中，公司暂无计划将AI模式设为默认。",
+        "source_url": "https://9to5google.com/2026/06/05/google-tests-sending-users-straight-to-ai-mode-instead-of-search-in-chrome/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E07",
+        "date": "06月05日",
+        "source": "cnbc.com",
+        "event": "谷歌寻求850亿美元数据中心融资",
+        "event_summary": "Alphabet于6月5日宣布计划通过股权出售筹集850亿美元，较最初目标增加50亿美元。此次融资将用于数据中心基础设施扩建，同时公司股价连续四周下跌，自上月市值短暂超越英伟达后投资者情绪有所转变。",
+        "source_url": "https://www.cnbc.com/2026/06/05/alphabet-ai-data-center-financing.html",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E08",
+        "date": "06月08日",
+        "source": "piunikaweb.com",
+        "event": "谷歌为Chrome带来圈选搜索功能",
+        "event_summary": "Google于6月8日为Chrome的Ask Gemini侧面板引入类似“圈选搜索”的功能，用户可选择屏幕上的一个或多个区域并将其发送给Gemini处理。该功能被视为侧面板最实用的升级之一，目前已在测试中。",
+        "source_url": "https://piunikaweb.com/2026/06/08/google-chrome-ask-gemini-circle-to-search-style-feature/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      }
+    ],
+    "news": [
+      {
+        "title": "谷歌推出Gemma 4 12B多模态模型：编码器无关架构，支持本地运行",
+        "source": "developers.googleblog.com",
+        "date": "06月03日",
+        "url": "https://developers.googleblog.com/en/gemma-4-12b-the-developer-guide/",
+        "summary": "【事件核心】Google于6月3日发布Gemma 4 12B模型，这是一个密集多模态模型，采用统一的编码器无关架构，支持图像、文本和音频输入。该模型是Gemma系列中首个中等规模支持音频输入的模型，旨在为开发者提供更强大的本地AI推理能力，无需依赖云端。\n\n【深度细节/数据支撑】Gemma 4 12B采用单解码器Transformer，视觉嵌入器仅35M参数，取代了其他中等规模Gemma 4模型的27个视觉Transformer层；音频波投影消除了单独的音频编码器，将原始16kHz音频信号切片为40ms帧并线性投影到LLM输入空间。模型足够小，可在16GB VRAM的专用GPU笔记本上本地运行，并额外提供多令牌预测（MTP）模型以最大化本地推理速度。此外，Google首次发布可下载的macOS桌面应用，让开发者在消费级设备上体验完全本地的语音和视觉交互。该模型支持图像、文本和音频等多种输入，但输出仍为文本。\n\n【行业深远影响】Gemma 4 12B的编码器无关架构显著降低了多模态延迟和内存碎片，为本地AI应用树立了新标杆。开发者可在本地设备上运行多模态AI，无需依赖云端，这有望推动隐私敏感型应用和离线场景的创新。同时，macOS桌面应用的发布降低了AI开发门槛，可能加速AI在个人计算中的普及。不过，该模型目前仅面向开发者，普通用户需等待后续集成。",
+        "summary_chars": 582,
+        "sentence_count": 10,
+        "forbidden_summary": false
+      },
+      {
+        "title": "谷歌为Chrome带来圈选搜索功能：Ask Gemini侧面板支持屏幕区域选择",
+        "source": "piunikaweb.com",
+        "date": "06月08日",
+        "url": "https://piunikaweb.com/2026/06/08/google-chrome-ask-gemini-circle-to-search-style-feature/",
+        "summary": "【事件核心】Google于6月8日为Chrome的Ask Gemini侧面板引入类似“圈选搜索”的功能，用户可选择屏幕上的一个或多个区域并将其发送给Gemini处理。该功能被视为侧面板最实用的升级之一，目前已在Chrome Canary版本中测试。\n\n【深度细节/数据支撑】该功能由爆料者Leopeva64发现，允许用户选择屏幕上的一个或多个区域作为附件发送给Gemini，从而支持多区域查询。此前在3月，Google已添加自定义键盘快捷键的设置。目前该功能在Canary构建中可用，用户可同时选择多个屏幕区域进行提问，适用于图像、UI错误、图表等需要视觉上下文的场景。该功能与Android上的“圈选搜索”类似，但集成在Chrome侧面板中，无需离开当前页面。\n\n【行业深远影响】此功能是Google扩大Chrome AI工具集的一部分，与自动选择最佳信用卡、浮动搜索栏等功能共同推动Gemini的实用性。圈选搜索功能降低了用户与AI交互的门槛，使Gemini能更自然地处理视觉信息，可能改变用户浏览网页的方式，并增强Chrome在AI浏览器竞争中的地位。不过，由于仍处于测试阶段，其实际影响取决于Google的最终决策和用户接受度。",
+        "summary_chars": 518,
+        "sentence_count": 9,
+        "forbidden_summary": false
+      }
+    ]
+  },
+  {
+    "topic": "Tesla",
+    "raw": 29,
+    "fresh": 29,
+    "ranked": 26,
+    "timeline_count": 8,
+    "news_before_title_gate": 4,
+    "news_count": 4,
+    "warnings": [],
+    "timeline": [
+      {
+        "event_id": "E01",
+        "date": "06月02日",
+        "source": "marklines.com",
+        "event": "特斯拉在德州工厂部署Optimus机器人",
+        "event_summary": "特斯拉已开始在得克萨斯州超级工厂北校区建设一座专用工厂，用于生产Optimus人形机器人，目标年产能高达1000万台。目前地基已浇筑，结构钢开始架设，二期土地回收工作正在进行中。",
+        "source_url": "https://www.marklines.com/en/news/345418",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E02",
+        "date": "06月06日",
+        "source": "techtimes.com",
+        "event": "特斯拉Robotaxi覆盖奥斯汀全城",
+        "event_summary": "特斯拉于6月3日将其无人监督的Robotaxi服务扩展至整个奥斯汀都会区，覆盖面积约245平方英里，成为该服务自去年夏季启动以来第五次也是最大一次区域扩张。不过，目前实际运营的无人驾驶车辆仅约20辆，引发外界对车队规模与服务质量匹配的担忧。",
+        "source_url": "https://www.techtimes.com/articles/317890/20260605/tesla-robotaxi-covers-entire-austin-metro-245-square-miles-about-20-driverless-cars.htm",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E03",
+        "date": "06月03日",
+        "source": "themarketperiodical.com",
+        "event": "特斯拉股价面临技术性双顶压力",
+        "event_summary": "特斯拉股价本周承压，从5月高点446美元回落至约423美元，日线图上形成双顶形态。市场担忧估值过高、竞争加剧以及汽车业务增长放缓，尽管Optimus人形机器人业务被寄予厚望。",
+        "source_url": "https://themarketperiodical.com/2026/06/03/tesla-stock-faces-technical-pressure-despite-optimus-growth-expectations/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E04",
+        "date": "06月03日",
+        "source": "eletric-vehicles.com",
+        "event": "特斯拉美国销量连续下滑",
+        "event_summary": "据Motor Intelligence数据，特斯拉5月美国销量同比下降12.1%至40,578辆，连续第八个月下滑。尽管近期有车型更新，但前五个月累计销量仅229,000辆，同比下降明显。",
+        "source_url": "https://eletric-vehicles.com/tesla/tesla-extends-us-sales-slide-to-eight-months-motor-intelligence-data-shows/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E05",
+        "date": "06月05日",
+        "source": "invezz.com",
+        "event": "摩根大通上调特斯拉评级至增持",
+        "event_summary": "长期看空特斯拉的摩根大通分析师将评级从卖出上调至中性，目标价升至475美元。理由包括Optimus和工厂机器人构成的“物理AI”飞轮效应，以及垂直整合可能降低汽车成本约5%，同时带来新收入来源。",
+        "source_url": "https://invezz.com/news/2026/06/05/tesla-stock-receives-an-upgrade-from-one-of-its-longest-standing-bears/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E06",
+        "date": "06月05日",
+        "source": "electrek.co",
+        "event": "特斯拉推迟Roadster演示至明年",
+        "event_summary": "特斯拉将下一代Roadster的公开演示推迟至8月或更晚，原因是SpaceX冷气推进系统仍需完善。该车型原型车于近九年前首次亮相，此次演示原定于近期举行。",
+        "source_url": "https://electrek.co/2026/06/05/tesla-roadster-demo-delayed-august-spacex-thruster/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E07",
+        "date": "06月06日",
+        "source": "evxl.co",
+        "event": "特斯拉向内华达州申请5000辆Robotaxi",
+        "event_summary": "特斯拉已向内华达州交通管理局提交申请，请求在克拉克县（包括拉斯维加斯）运营最多5000辆自动驾驶出租车，期限为获批后12个月内。申请文件于6月5日公开，明确提及拉斯维加斯哈里·里德国际机场等接驳点。",
+        "source_url": "https://evxl.co/2026/06/06/tesla-asks-nevada-for-5000-robotaxis/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      },
+      {
+        "event_id": "E08",
+        "date": "06月07日",
+        "source": "rollingout.com",
+        "event": "黄仁勋称特斯拉Optimus价值巨大",
+        "event_summary": "英伟达CEO黄仁勋在近期采访中表示，特斯拉的Optimus人形机器人项目可能超越SpaceX的价值。他认为马斯克是杰出的工程师，并强调物理AI和机器人技术的巨大潜力。",
+        "source_url": "https://rollingout.com/2026/06/07/jensen-huang-says-teslas-optimus-eclipse/",
+        "history_status": "",
+        "first_seen": "",
+        "last_seen": "",
+        "seen_count": 0
+      }
+    ],
+    "news": [
+      {
+        "title": "黄仁勋称特斯拉Optimus价值可能超越SpaceX",
+        "source": "rollingout.com",
+        "date": "06月07日",
+        "url": "https://rollingout.com/2026/06/07/jensen-huang-says-teslas-optimus-eclipse/",
+        "summary": "【事件核心】英伟达CEO黄仁勋在近期采访中表示，特斯拉的Optimus人形机器人项目可能超越SpaceX的价值。他认为马斯克是杰出的工程师，并强调物理AI和机器人技术的巨大潜力。黄仁勋将Optimus描述为第一个有望实现制造规模和技术成熟度的人形机器人，并预测人形机器人将成为下一个万亿美元级产业。SpaceX预计上市估值约1.75万亿美元，高于特斯拉当前约1.47万亿美元的市值。马斯克计划最早于2027年开始向公众销售Optimus，目前已在特斯拉工厂执行基本任务。\n\n【深度细节/数据支撑】黄仁勋的背书进一步提升了市场对特斯拉机器人业务的预期。尽管Figure AI、Unitree等公司也在开发人形机器人，但特斯拉在AI能力、生产规模和车辆数据收集方面具有独特优势。该事件可能加速投资者对特斯拉长期价值的重估。\n\n【行业深远影响】黄仁勋的评论凸显了人形机器人领域的巨大潜力，特斯拉凭借其制造和AI能力有望占据领先地位。若Optimus成功商业化，将开辟新的收入来源，并可能重塑制造业和物流业格局。",
+        "summary_chars": 452,
+        "sentence_count": 10,
+        "forbidden_summary": false
+      },
+      {
+        "title": "特斯拉将Roadster演示推迟至8月，SpaceX推进器仍在完善",
+        "source": "Electrek",
+        "date": "06月05日",
+        "url": "https://electrek.co/2026/06/05/tesla-roadster-demo-delayed-august-spacex-thruster/",
+        "summary": "【事件核心】特斯拉再次推迟下一代Roadster的公开演示，原定于近期举行的活动被推迟至8月或更晚。该车型原型车于近九年前首次亮相，此次演示旨在展示与SpaceX合作的冷气推进系统。据The Information援引四位知情人士报道，演示预计在德克萨斯州举行，将展示SpaceX冷气推进系统（内部称为“A71”），该系统旨在大幅提升加速性能，甚至实现短暂离地。CEO埃隆·马斯克在2025年10月曾表示计划于2026年4月1日亮相，但未能兑现；随后推迟至5月底或6月初，如今又延至8月。自2017年11月原型车亮相以来，马斯克已至少八次推迟时间表。\n\n【深度细节/数据支撑】在2025年11月股东大会上，他设定2026年4月1日为演示日，并公开称该日期给了他“否认权”。2026年3月，他将措辞从“演示”改为“亮相”，并推迟至4月底；在Q1 2026财报电话会议上，他又说“可能一个月左右”。Roadster的反复推迟已成为特斯拉承诺落空的典型案例。自2024年10月Cybercab亮相以来，这是特斯拉首次计划举办车辆活动，但至今无法确定日期。该车型的量产已推迟至2027-2028年。\n\n【行业深远影响】此次延迟凸显了SpaceX技术整合的复杂性，也可能影响投资者对特斯拉创新能力的信心。Roadster作为特斯拉的旗舰跑车，其多次跳票可能损害品牌形象，但若最终成功，将展示特斯拉在极端性能技术上的突破。",
+        "summary_chars": 605,
+        "sentence_count": 12,
+        "forbidden_summary": false
+      },
+      {
+        "title": "特斯拉申请在拉斯维加斯部署5000辆自动驾驶出租车",
+        "source": "Self Driving Cars 360",
+        "date": "06月07日",
+        "url": "https://www.selfdrivingcars360.com/tesla-aims-to-flood-las-vegas-streets-with-5000-robotaxis-in-year-one/",
+        "summary": "【事件核心】特斯拉正式向内华达州监管机构提交申请，计划在克拉克县（包括拉斯维加斯）运营一个大型自动驾驶出租车网络，并在第一年内部署多达5000辆全自动驾驶车辆。申请实体为特斯拉自动驾驶出租车有限责任公司，明确提及拉斯维加斯哈利·里德国际机场等接载区域。根据内华达州交通管理局6月5日发布的公告，特斯拉的申请被列为案卷26-05015，寻求克拉克县的自动驾驶车辆网络公司许可。申请中部分信息被要求保密，红acted版本已在管理局拉斯维加斯办公室存档。管理局将2026年7月5日设为提交抗议和书面意见的截止日期。\n\n【深度细节/数据支撑】相比之下，Zoox在2025年的AVNC申请仅寻求约100辆车的授权，特斯拉的5000辆规模远超此前请求，引发行业观察人士的立即关注。然而，截至5月底，独立追踪数据显示，特斯拉在美国实际运营的无安全驾驶员载客车辆仅约20辆，分布在奥斯汀、达拉斯和休斯顿。申请数量是当前实际运营规模的250倍。如果获批，这将是迄今为止提出的最大规模单一市场自动驾驶车辆部署之一。内华达州相对宽松的测试环境吸引了多家自动驾驶公司，但也引发了关于监管机构应多快批准大型车队的辩论。\n\n【行业深远影响】此举标志着特斯拉在自动驾驶商业化道路上迈出关键一步，可能重塑拉斯维加斯的交通格局。但实际运营能力与申请规模之间的巨大差距引发质疑，特斯拉需证明其技术可靠性和运营效率。该申请也可能推动内华达州自动驾驶监管框架的完善，并为其他州提供参考。",
+        "summary_chars": 623,
+        "sentence_count": 13,
+        "forbidden_summary": false
+      },
+      {
+        "title": "特斯拉将无人驾驶出租车服务扩展至整个奥斯汀都会区",
+        "source": "thecooldown.com",
+        "date": "06月07日",
+        "url": "https://www.thecooldown.com/green-tech/tesla-expands-robotaxi-service-austin-metro/",
+        "summary": "【事件核心】特斯拉于2026年6月3日宣布，其无人监督的Robotaxi服务已扩展至整个奥斯汀都会区，覆盖Pflugerville、Manor、I-35、得克萨斯超级工厂及奥斯汀-伯格斯特罗姆机场等区域。这是特斯拉在奥斯汀的第五次扩展，也是自2025年10月以来的首次。此次扩展使无人监督区域大致翻倍，与初始启动区域相比，增长了12倍以上。特斯拉于2025年6月在奥斯汀开始公共Robotaxi服务时，地理围栏仅覆盖约20平方英里。新开放区域包括Pflugerville和Manor郊区、35号州际公路走廊、特斯拉得克萨斯超级工厂以及奥斯汀-伯格斯特罗姆国际机场。\n\n【深度细节/数据支撑】据Robotaxi Tracker数据显示，5月13日奥斯汀有27辆无人监督Robotaxi在运营，但近期数量降至20辆。批评者指出，车队规模可能正在缩小，而服务区域扩大可能导致等待时间延长。支持者认为这是进步，但质疑声依然存在，强调安全是首要关注点。此次扩展标志着无人监督边界首次与更广泛的服务区域完全对齐，意味着未来的扩展可以同时扩大两个边界。\n\n【行业深远影响】此次扩展显示了特斯拉在自动驾驶技术上的快速进步，并可能加速其Robotaxi服务的商业化进程，对Uber、Lyft等网约车公司构成直接竞争压力。但车队规模与需求匹配问题凸显，若无法增加车辆，扩大覆盖范围可能反而降低用户体验。该事件也反映了自动驾驶出租车行业在扩张与运营效率之间的普遍挑战。",
+        "summary_chars": 623,
+        "sentence_count": 12,
+        "forbidden_summary": false
+      }
+    ]
+  }
+]
