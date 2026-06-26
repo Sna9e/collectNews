@@ -1,0 +1,92 @@
+news_companies:
+  - ATI Industrial Automation
+  - OnRobot
+  - Robotiq
+  - FANUC
+  - KUKA
+  - ABB
+  - Yaskawa
+  - Kistler
+  - HBK
+  - HBM
+  - MinebeaMitsumi
+  - Nissha
+  - Tekscan
+  - Touchence
+  - XELA Robotics
+  - Tesla Optimus
+  - Figure AI
+  - Agility Robotics
+  - Sanctuary AI
+  - 优必选
+  - 傅利叶智能
+  - 智元机器人
+  - 宇树科技
+  - 节卡机器人
+  - 越疆机器人
+  - 坤维科技
+  - 蓝点触控
+
+patent_applicants:
+  - ATI Industrial Automation
+  - Kistler
+  - HBK
+  - HBM
+  - MinebeaMitsumi
+  - Nissha
+  - Sony
+  - Toyota
+  - Honda
+  - Tesla
+  - Samsung
+  - Huawei
+  - UBTECH
+  - Fourier Intelligence
+  - Agile Robots
+  - 高校
+  - 研究院
+
+preferred_news_domains:
+  - ati-ia.com
+  - onrobot.com
+  - robotiq.com
+  - fanucamerica.com
+  - kuka.com
+  - abb.com
+  - yaskawa.com
+  - kistler.com
+  - hbkworld.com
+  - hbm.com
+  - minebeamitsumi.com
+  - nissha.com
+  - tekscan.com
+  - touchence.jp
+  - xelarobotics.com
+  - roboticsbusinessreview.com
+  - therobotreport.com
+  - spectrum.ieee.org
+  - techcrunch.com
+  - reuters.com
+  - bloomberg.com
+  - automate.org
+  - ifr.org
+
+patent_domains:
+  - patents.google.com
+  - worldwide.espacenet.com
+  - patentscope.wipo.int
+  - uspto.gov
+  - cnipa.gov.cn
+  - j-platpat.inpit.go.jp
+  - lens.org
+
+paper_domains:
+  - ieeexplore.ieee.org
+  - sciencedirect.com
+  - link.springer.com
+  - mdpi.com
+  - arxiv.org
+  - tandfonline.com
+  - nature.com
+  - frontiersin.org
+
