@@ -1,5 +1,96 @@
 # HANDOFF.md
 
+## 0K. 2026-06-22 更新：新增应变片 / 机器人六轴力传感器独立专题模块
+
+本次新增独立技术专题模块“应变片与机器人六轴力传感器”。该模块不并入 Apple、Google、Tesla 等公司日更主题，不占用频道一或频道三详细新闻配额；前端作为独立 tab 触发。
+
+新增文件：
+- `strain_gauge_intelligence/__init__.py`
+- `strain_gauge_intelligence/models.py`
+- `strain_gauge_intelligence/collector.py`
+- `strain_gauge_intelligence/reporter.py`
+- `strain_gauge_intelligence/config/keywords.yaml`
+- `strain_gauge_intelligence/config/companies.yaml`
+- `strain_gauge_intelligence/config/report_rules.yaml`
+- `tools/strain_gauge_query_packs.py`
+- `tests/test_strain_gauge_module.py`
+- `docs/STRAIN_GAUGE_SENSOR_MODULE_GUIDE_CN.md`
+
+修改文件：
+- `agent_app.py`
+  - 新增 tab：`🧲 应变片/六轴力传感器专题`。
+  - 该 tab 调用 `collect_strain_gauge_module()`，固定复用 Exa，不调用 Tavily，不新增 LLM 调用。
+  - 前端显示新闻、专利、论文数量和数量校验结果，并提供 JSON/XLSX/Markdown 下载。
+- `PLANS.md`
+  - 新增应变片专题任务清单。
+- `HANDOFF.md`
+  - 记录本次实现、测试和真实验证结果。
+
+新增配置项：
+- `TECH_MODULES = ["应变片与机器人六轴力传感器"]`
+- 英文名：`Strain Gauge and Robotic Six-Axis Force/Torque Sensor`
+- 固定公司主题仍保留在 `MANDATORY_TOPICS` 中，不受影响。
+
+新增关键词：
+- 中文：应变片、箔式应变片、薄膜应变片、柔性应变传感器、六轴力传感器、六维力传感器、六分力传感器、机器人腕部力传感器、机器人关节力传感器、惠斯通电桥、全桥应变测量、温度补偿、解耦算法、标定矩阵、FPC应变片等。
+- 英文：strain gauge、foil strain gauge、thin film strain gauge、flexible strain sensor、six-axis force/torque sensor、multi-axis force sensor、robot wrist force torque sensor、Wheatstone bridge、temperature compensation、decoupling algorithm、calibration matrix、FPC strain gauge 等。
+
+数据结构：
+- `StrainGaugeIntelligenceItem`
+  - 通用字段：`item_type`、`title`、`date`、`source_name`、`source_url`、`summary`、`relation_to_sensor`、`fpc_implication`、`relevance_level`。
+  - 专利字段：`publication_number`、`applicant`、`country_or_region`、`core_solution`、`reference_point`。
+  - 论文字段：`authors_or_institutions`、`venue`、`doi_or_link`、`research_object`、`sensing_structure`、`key_methods_metrics`、`engineering_value`。
+- `StrainGaugeModulePayload`
+  - 包含 `news`、`patents`、`papers`、`quantity_check`、`searched_windows` 和 `warnings`。
+
+真实验证：
+- 运行命令：
+  - `python -m strain_gauge_intelligence.collector --provider exa --max-queries-per-type 6 --results-per-query 6 --overwrite`
+- 输出文件：
+  - `data/strain_gauge_intelligence/raw/strain_gauge_module_2026-06-22.json`
+  - `data/strain_gauge_intelligence/raw/strain_gauge_module_2026-06-22.xlsx`
+  - `data/strain_gauge_intelligence/reports/strain_gauge_force_sensor_report_2026-06-22.md`
+- 生成数量：
+  - 新闻 / 公司动态：7 条。
+  - 专利动态：0 条。
+  - 论文 / 学术进展：4 条。
+- 数量校验：
+  - 未通过。原因是专利条目不足。
+  - 模块没有静默跳过，报告已明确写入不足原因和已检索范围：新闻 30 天、专利 12 个月和 3 年、论文 3 年。
+- 本次收紧：
+  - 摘要不再直接拼接短英文搜索片段。
+  - 删除免责声明式兜底语，并在测试中覆盖禁用语。
+  - 排除明显低质量/泛产品页和博客型来源，宁愿减少数量也不凑数。
+
+真实来源链接抽样：
+- 新闻：
+  - `https://embodiedglobal.com/en/article/bluepoint-touch-c-plus-plus-force-sensor-funding-2026`
+  - `https://finance.sina.com.cn/roll/2026-06-05/doc-iniaiyyr1683712.shtml`
+  - `https://36kr.com/p/3381031938352899`
+  - `https://36kr.com/p/3739230862802945`
+  - `https://blog.robotiq.com/robotiq-releases-tsf-85-digital-twin-on-nvidia-isaac-sim?hs_amp=true`
+- 论文：
+  - `https://nature.com/articles/s41528-026-00604-x`
+  - `https://sciencedirect.com/science/article/abs/pii/S2211285526003800`
+  - `https://nature.com/articles/s41378-026-01364-4`
+  - `https://link.springer.com/article/10.1007/s00170-026-18440-8`
+- 专利：
+  - 本次真实运行没有通过字段完整性和相关性校验的专利条目，因此无正式专利链接输出。
+
+已执行验证：
+- `python tests\test_strain_gauge_module.py`
+- `python tests\test_pwg_query_packs.py`
+- `python tests\test_pwg_collector.py`
+- `python tests\test_pwg_reports.py`
+- `python -m py_compile agent_app.py tools\strain_gauge_query_packs.py strain_gauge_intelligence\__init__.py strain_gauge_intelligence\models.py strain_gauge_intelligence\collector.py strain_gauge_intelligence\reporter.py tests\test_strain_gauge_module.py`
+
+风险和后续优化：
+- 普通 Exa 搜索不适合直接承担专利库检索，容易召回 CNIPA 公告页、新闻页或 USPTO 通知页，而不是具体专利文献。
+- Google Patents XHR 兜底在真实验证时出现 503 或无结果，不能作为稳定生产依赖。
+- 后续应接入稳定专利 API 或专利库解析器，例如 Lens、PatentsView、CNIPA 批量检索、企业专利监控服务。
+- 当前新闻摘要仍主要来自搜索摘要，已增加规则化中文摘要和低质量来源过滤，但后续仍建议接入正文抓取和更严格信源质量分级。
+- 当前论文作者/机构和实验指标为规则抽取，建议后续接入 DOI 元数据或论文正文解析。
+
 ## 0J. 2026-06-18 更新：频道四 PWG Streamlit 前端入口上线验证
 
 本次将已完成的 PWG 情报系统接入现有 Streamlit 前端，作为独立“频道四：PWG技术情报”。保持最小改动；没有修改频道一、频道二、频道三的处理链路，没有修改 `tools/search_engine.py` 接口行为，也没有把 PWG 输出混入原有 Word/PPT 报告状态机。

@@ -80,6 +80,12 @@ from pwg_intelligence.reporter import (
     write_daily_brief,
     write_weekly_review,
 )
+from strain_gauge_intelligence import TECH_MODULES as STRAIN_GAUGE_TECH_MODULES
+from strain_gauge_intelligence.collector import (
+    DEFAULT_RAW_DIR as STRAIN_GAUGE_DEFAULT_RAW_DIR,
+    collect_strain_gauge_module,
+)
+from strain_gauge_intelligence.reporter import DEFAULT_REPORT_DIR as STRAIN_GAUGE_DEFAULT_REPORT_DIR
 
 _LOCAL_DOTENV_CACHE = None
 _LOCAL_SECRET_CACHE = None
@@ -1529,11 +1535,12 @@ with st.sidebar:
 st.title("🧠 商业情报战情室（事件主档统一版）")
 
 if not st.session_state.report_ready:
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📚 频道一：公司追踪（带金融量化）",
         "🌐 频道二：每日宏观行业早报（全域扫描）",
         "📱 频道三：科技消费电子日报",
         "🧪 频道四：PWG技术情报",
+        "🧲 应变片/六轴力传感器专题",
     ])
 
     with tab1:
@@ -2758,6 +2765,137 @@ if not st.session_state.report_ready:
                     use_container_width=True,
                     hide_index=True,
                 )
+
+    with tab5:
+        st.markdown(
+            f"💡 **专题模块：{STRAIN_GAUGE_TECH_MODULES[0]}**。"
+            "本模块独立跟踪机器人六轴力/力矩传感器中的应变片、弹性体、电桥、解耦标定、专利和论文进展，"
+            "不参与 Apple / Google / Tesla 等公司日更主题排序。"
+        )
+        st.caption(
+            "输出位置："
+            f"原始结果 `{STRAIN_GAUGE_DEFAULT_RAW_DIR}`；"
+            f"专题报告 `{STRAIN_GAUGE_DEFAULT_REPORT_DIR}`。"
+        )
+        st.caption("本模块当前复用 Exa 搜索，不调用 Tavily，不新增大模型调用；数量不足时会自动扩大检索窗口并写入校验结果。")
+
+        sg_col1, sg_col2 = st.columns(2)
+        with sg_col1:
+            sg_max_queries = st.number_input(
+                "每类 query 数",
+                min_value=2,
+                max_value=20,
+                value=8,
+                step=1,
+                key="strain_gauge_max_queries",
+            )
+        with sg_col2:
+            sg_results_per_query = st.number_input(
+                "每条 query 结果数",
+                min_value=3,
+                max_value=20,
+                value=6,
+                step=1,
+                key="strain_gauge_results_per_query",
+            )
+
+        run_sg_module = st.button(
+            "🧲 生成应变片 / 六轴力传感器专题",
+            type="primary",
+            use_container_width=True,
+            key="btn_strain_gauge_module",
+        )
+
+        def render_sg_download(label, path, mime, key):
+            if not path:
+                return
+            file_path = Path(path)
+            if file_path.is_file():
+                with file_path.open("rb") as file_obj:
+                    st.download_button(
+                        label,
+                        file_obj,
+                        file_name=file_path.name,
+                        mime=mime,
+                        key=key,
+                        use_container_width=True,
+                    )
+
+        if run_sg_module:
+            if not exa_key:
+                st.error("该专题需要 EXA_API_KEY。请先在 `.streamlit/secrets.toml` 或环境变量中配置。")
+            else:
+                with st.spinner("正在检索新闻、专利和论文，并执行相关性筛选与数量校验..."):
+                    try:
+                        sg_payload = collect_strain_gauge_module(
+                            provider="exa",
+                            tavily_key="",
+                            exa_key=exa_key,
+                            max_queries_per_type=int(sg_max_queries),
+                            results_per_query=int(sg_results_per_query),
+                        )
+                        st.session_state.strain_gauge_last_run = sg_payload
+                        st.success("应变片 / 六轴力传感器专题生成完成。")
+                    except Exception as exc:
+                        st.error(f"专题模块运行失败：{exc.__class__.__name__}: {exc}")
+                        st.exception(exc)
+
+        sg_last_run = st.session_state.get("strain_gauge_last_run")
+        if sg_last_run:
+            quantity = sg_last_run.get("quantity_check", {}) or {}
+            counts = quantity.get("counts", {}) or {}
+            sg_metrics = st.columns(4)
+            sg_metrics[0].metric("新闻/公司动态", int(counts.get("news", len(sg_last_run.get("news", []) or [])) or 0))
+            sg_metrics[1].metric("专利动态", int(counts.get("patent", len(sg_last_run.get("patents", []) or [])) or 0))
+            sg_metrics[2].metric("论文/学术进展", int(counts.get("paper", len(sg_last_run.get("papers", []) or [])) or 0))
+            sg_metrics[3].metric("数量校验", "通过" if quantity.get("passed") else "不足")
+
+            if not quantity.get("passed"):
+                st.warning(f"数量不足：{quantity.get('shortages', {})}")
+
+            st.markdown("#### 输出文件")
+            sg_output_paths = {
+                "Raw JSON": sg_last_run.get("output_json", ""),
+                "Raw Excel": sg_last_run.get("output_xlsx", ""),
+                "专题 Markdown": sg_last_run.get("output_markdown", ""),
+            }
+            for label, path in sg_output_paths.items():
+                if path:
+                    st.caption(f"{label}: `{path}`")
+
+            sg_download_cols = st.columns(3)
+            with sg_download_cols[0]:
+                render_sg_download("下载 Raw JSON", sg_last_run.get("output_json", ""), "application/json", "download_sg_json")
+            with sg_download_cols[1]:
+                render_sg_download(
+                    "下载 Raw Excel",
+                    sg_last_run.get("output_xlsx", ""),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "download_sg_xlsx",
+                )
+            with sg_download_cols[2]:
+                render_sg_download("下载专题报告", sg_last_run.get("output_markdown", ""), "text/markdown", "download_sg_md")
+
+            md_path = Path(sg_last_run.get("output_markdown", "") or "")
+            if md_path.is_file():
+                with st.expander("预览应变片 / 六轴力传感器专题", expanded=False):
+                    st.markdown(md_path.read_text(encoding="utf-8")[:7000])
+
+            preview_rows = []
+            for group_name, key in (("新闻", "news"), ("专利", "patents"), ("论文", "papers")):
+                for row in sg_last_run.get(key, []) or []:
+                    preview_rows.append(
+                        {
+                            "类型": group_name,
+                            "标题": row.get("title", ""),
+                            "日期": row.get("date", ""),
+                            "来源": row.get("source_name", ""),
+                            "相关性": row.get("relevance_level", ""),
+                            "链接": row.get("source_url", ""),
+                        }
+                    )
+            if preview_rows:
+                st.dataframe(preview_rows[:40], use_container_width=True, hide_index=True)
 
 else:
     if not st.session_state.report_celebrated:
