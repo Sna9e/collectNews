@@ -1,5 +1,102 @@
 # HANDOFF.md
 
+## 0Q. 2026-08-18 更新：频道一参考仓库优化
+
+### 范围与参考结论
+
+- 本次只优化频道一的十个公司/主题、短新闻摘要、短长新闻对应关系及重点高亮；未改变频道二、频道三、PWG、应变片专题、金融补链、搜索供应商配置或 PPT 母版。
+- 已只读扫描 `E:\Users\zwz10\PycharmProjects\News-main_0818\News-main` 的全部文件，并解析其中 24 个 Python 文件。参考仓库与当前仓库的 `timeline_agent.py`、`deep_analyst.py`、`company_query_packs.py`、`report_linker.py`、`export_ppt.py` 及频道一测试文件哈希一致，因此不存在遗漏补丁可直接复制；本次是在当前共同基线上继续收紧逻辑。
+- 参考输出暴露的主要问题是：摘要 fallback 偏向前几句、`event_id` 被无条件信任、模糊匹配可多对一、所有已展开短新闻都使用同一种橙色高亮，以及详细新闻缺少明确编号。
+
+### 实现
+
+- `tools/company_query_packs.py`
+  - 新增 `DEFAULT_COMPANY_TOPICS`，顺序为 Apple、Google、Amazon、OpenAI、Meta、Nvidia、Tesla、特朗普、Anthropic、SpaceX。
+  - 十个主题各自拥有 `summary_focus`、`high_value_signals`、补充权威域名和三组补充查询，覆盖产品版本、模型/API、芯片与数据中心、供应链、Robotaxi/Optimus、关税与出口管制、Claude、Starship/Starlink 等差异化内容。
+- `agents/timeline_agent.py`
+  - `event_summary` 统一为通常 3-4 句、建议 100-180 字。
+  - fallback 对句子按事件标题、关键词、动作和具体参数评分，从相关锚点向后保留上下文，避免新闻前部泛科技导语挤掉事件事实。
+  - 摘要质量评分同步按 100-180 字和 3-4 句选择，不再沿用旧的 100-220 字口径。
+- `agents/deep_analyst.py`
+  - 规范化 URL 后优先回填/纠正 `event_id`；只有 URL 无法对齐时才保留或改用语义映射。
+  - Prompt 增加证据化 importance 规则：5 分限于重大正式发布、已生效重大政策、量产交付或有数字支撑的标志事件；4 分用于实质产品、客户、资本开支、产能和供应链节点；热点词本身不能提高分数。
+- `tools/report_linker.py`
+  - 匹配顺序改为同一规范化原文 URL → 经标题/摘要/来源/日期复核的 event_id → 全局一对一语义匹配。
+  - 每条详细新闻增加 `detail_index`；短新闻增加 `matched_news_index`、`matched_news_importance`、`match_method` 和 `highlight_level`。
+  - `importance >= 4` 标记为 `key`，普通已展开新闻标记为 `linked`；一个详细新闻最多承接一条短新闻，未通过门槛的短新闻保持未关联。
+- `tools/export_ppt.py`、`tools/export_word.py`、`agent_app.py`
+  - 重点短新闻使用橙色星标，普通已展开短新闻使用深蓝色圆点；历史延续标记继续保留。
+  - 时间线显示“详见后文：详细新闻 N《标题》”，详细页标题显示“详细新闻 N｜标题”。
+  - 频道一不展示内部 event_id 和长 match_reason；这些字段仍保留在数据中用于排错。PPT 摘要仍为 Pt(11)、RGB(31,78,121)，每页最多 3 条，原文 hyperlink 保持不变。
+  - Streamlit 页面默认输入十个主题，频道一预览同样区分橙/蓝高亮并隐藏长匹配原因。
+
+### 修改文件
+
+- `agent_app.py`
+- `agents/timeline_agent.py`
+- `agents/deep_analyst.py`
+- `tools/company_query_packs.py`
+- `tools/report_linker.py`
+- `tools/export_ppt.py`
+- `tools/export_word.py`
+- `tests/test_channel1_timeline_summary.py`
+- `tests/test_channel1_reference_optimization.py`（新增）
+- `PLANS.md`
+- `HANDOFF.md`
+
+### 验证
+
+- `python -m compileall -q agent_app.py agents tools pwg_intelligence strain_gauge_intelligence setup_api_keys.py tests`：通过。
+- 全量 `tests/test_*.py`：14 个测试脚本、102 个测试函数全部通过。
+- 新增频道一专项 4 项：十主题内容包、URL 优先 ID 修正、URL/event_id/语义匹配优先级与一对一约束、PPT 编号和两级颜色均通过。
+- 更新后的时间线专项 10 项通过，包含相关句优先、3-4 句/100-180 字、噪声清理、字段透传和每页最多 3 条。
+- 本地 stub PPT：`validation_outputs/channel1_reference_optimized_stub.pptx`。
+- 图片渲染目录：`validation_outputs/channel1_reference_optimized_stub/`；总览图：`validation_outputs/channel1_reference_optimized_stub_montage.png`。
+- `slides_test.py`：`Test passed. No overflow detected.`；已人工检查时间线页及详细新闻页图片，没有发现文字重叠、截断或编号错位。
+- Streamlit 已完整重启并运行在 `http://127.0.0.1:8506/`。浏览器确认频道一默认输入十个主题、五个频道入口完整、无异常堆栈和明显布局问题。
+- 参考仓库源代码未修改。视觉审查工具在参考目录生成了 `test_channel1_ppt_soft_review_output/` 和 `stub_validation_channel1_timeline_links/` 两个只含渲染 PNG 的临时目录；当前执行环境阻止删除操作，因此未自动清理。
+
+### 未验证与风险
+
+- 本次使用 stub 数据，不读取真实 API Key，也未调用 Exa、Tavily 或 OpenRouter completion；不能把本地 PPT 和规则测试视为真实端到端新闻质量验证。
+- 重点高亮依赖模型按新 rubric 输出 `importance`。真实运行需抽查 4/5 分是否有硬证据，避免模型把普通更新标成重点。
+- URL 优先匹配会移除常见追踪参数，但不同媒体的转载 URL 不会被视为同一原文；这类情况仍依赖 event_id 或语义匹配。
+- 一对一约束会有意让重复或证据不足的短新闻保持未关联，而不是都指向同一详细页。若真实数据出现“一条详细新闻确实合并多个时间线节点”的合法场景，需要基于样本再设计明确的合并标记，不能直接恢复无约束多对一。
+- 修改包含新模块级常量。正在运行的旧 Streamlit 进程只做热重载时可能保留旧模块缓存并出现一次导入错误；部署或本地升级后应完整重启 Streamlit，当前服务已按此处理。
+
+## 0P. 2026-08-18 更新：Streamlit Secrets 与 OpenRouter 单一前端
+
+### 最终交互方式
+
+- 上一版新增的浏览器会话 Key 输入已按部署要求撤销。API Key 不再出现在业务页面，只从 Streamlit Cloud `App settings → Secrets`、服务器环境变量或本地 `.streamlit/secrets.toml` 读取。
+- OpenRouter Base URL 固定使用 `https://openrouter.ai/api/v1`；页面不再显示地址输入框，旧 `OPENROUTER_BASE_URL` 配置不会影响当前应用。
+- 前端只保留 OpenRouter 可搜索模型目录和自定义模型 ID。reasoning 继续使用服务端配置或默认值，不再作为页面控件。
+- Gemini 主模型、轻任务模型、模型预设、自定义 ID 和状态说明均已从前端删除；三条业务模型构建路径统一使用当前 OpenRouter 模型。
+
+### 配置方式
+
+Streamlit Cloud 的 Secrets 至少配置：
+
+```toml
+OPENROUTER_API_KEY = "sk-or-v1-..."
+EXA_API_KEY = "..."
+```
+
+按实际搜索功能可继续配置 `TAVILY_API_KEY`、`JINA_API_KEY`、`GITHUB_TOKEN` 和 `GIST_ID`。Secrets 不会回填到页面。
+
+### 修改与验证
+
+- 修改：`agent_app.py`、`setup_api_keys.py`、`tests/test_qwen_llm_driver.py`、`README.md`、`PLANS.md`、`HANDOFF.md`。
+- `setup_api_keys.py` 将 Gemini Key 和旧 `OPENROUTER_BASE_URL` 标为禁用历史项：已有值可保留，但应用不读取，也不再提示新用户配置。
+- 静态回归锁定：页面不得出现 Key 输入、Base URL 输入、reasoning 选择或 Gemini 模型控件；应用必须从服务器端读取 `OPENROUTER_API_KEY` 并使用固定官方端点。
+- `python -m py_compile agent_app.py tools/llm_driver.py setup_api_keys.py tests/test_qwen_llm_driver.py`：通过。
+- `python tests/test_qwen_llm_driver.py`：11 项通过；新增用例覆盖服务器端 Secrets、固定端点和 OpenRouter-only 前端约束。
+- 全量 `tests/test_*.py`：13 个测试脚本、97 个测试函数全部通过。
+- `python setup_api_keys.py --show`：活动模型密钥只检查 `OPENROUTER_API_KEY`；Gemini Key 显示为 disabled，旧 Base URL 不再显示为活动设置。
+- Streamlit 浏览器自动检查：密码输入 0 个，Key/Base URL/reasoning/Gemini 控件均为 0；模型目录和自定义模型 ID 各为 1。自定义模型选择提交成功，并已恢复默认 `qwen/qwen3.7-flash`。
+- 页面截图检查无明显重叠或截断；本地验证地址为 `http://127.0.0.1:8506/`。
+- 本次修改未调用 OpenRouter completion API，也未在测试中使用真实 Key。
+
 ## 0N. 2026-08-17 更新：全局垃圾与机器人网站屏蔽
 
 ### 根因

@@ -1,5 +1,30 @@
 # PLANS.md
 
+## 频道一：参考 News-main_0818 的短新闻、长新闻对应与重点高亮优化
+
+- [x] 只读扫描 `E:\Users\zwz10\PycharmProjects\News-main_0818\News-main` 全部文件，并对 24 个 Python 文件完成 AST/函数/类级静态审查；参考仓库与当前仓库的频道一核心文件经哈希比较没有可直接搬运的差异。
+- [x] 将频道一默认追踪对象扩展并固定为 `Apple / Google / Amazon / OpenAI / Meta / Nvidia / Tesla / 特朗普 / Anthropic / SpaceX`。
+- [x] 为十个主题分别补充产品、模型、硬件、供应链、政策或商业化关注点、重点信号、权威来源域名及中英文查询，不把内容要求散落到页面 Prompt。
+- [x] 将短新闻摘要统一为自然中文 `3-4` 句、建议 `100-180` 字；fallback 从原始搜索内容中按事件相关性挑选句子，不再机械截取最前面的网页摘要。
+- [x] 优化详细新闻 `event_id` 回填：规范化原文 URL 优先，可纠正模型返回的错误 ID；无 URL 时再使用事件语义评分。
+- [x] 将短新闻到详细新闻的最终映射改为：同一规范化 URL → 经语义校验的 event_id → 一对一语义匹配，避免多个短新闻错误指向同一详细新闻。
+- [x] 为每个详细新闻生成主题内编号，并透传 `matched_news_index`、`matched_news_importance`、`match_method` 与 `highlight_level`；内部 `match_reason` 继续保留供调试。
+- [x] 频道一 PPT、Word 和 HTML 预览区分两级高亮：`importance >= 4` 为橙色重点新闻，普通已展开新闻为深蓝色；短新闻和详细页统一显示“详细新闻 N”，频道一不再展示长匹配原因和内部事件 ID。
+- [x] 新增专项测试，覆盖十个主题内容包、相关句选择、URL 优先回填、一对一关联、编号以及橙/蓝两级 PPT 高亮。
+- [x] 生成 `validation_outputs/channel1_reference_optimized_stub.pptx`，用 `python-pptx` 复查字段与颜色，并完成逐页图片渲染；`slides_test.py` 未发现页面越界。
+- [x] 完成全量回归：14 个测试脚本、102 个测试函数通过，`compileall` 通过；Streamlit 完整重启后浏览器检查正常。
+- [ ] 使用有效 Exa/OpenRouter Key 执行十主题真实频道一端到端验证，重点抽查模型 `importance` 分级、搜索结果质量和 URL 缺失场景；本次未读取真实 API Key。
+
+## Streamlit Secrets 与 OpenRouter 单一前端
+
+- [x] API Key 仅从 `st.secrets`、服务器环境变量或本地服务端配置读取，删除业务页面的 Key 输入和清除控件。
+- [x] OpenRouter Base URL 固定为 `https://openrouter.ai/api/v1`，删除前端地址输入并忽略旧 `OPENROUTER_BASE_URL` 设置。
+- [x] 删除 Gemini 主模型、轻任务模型、预设按钮和对应运行参数；当前 Streamlit 业务链只构建 OpenRouter 模型栈。
+- [x] 删除前端 reasoning 设置，保留服务端默认/配置；前端只保留可搜索模型目录和自定义模型 ID。
+- [x] 将 Gemini Key 与旧 OpenRouter Base URL 在本地配置脚本中降为禁用历史项，保留已有值但不参与运行。
+- [x] 更新 README、静态安全回归和交接文档，并完成 Streamlit 浏览器验证。
+- [x] 完成语法、专项和全量回归：13 个测试脚本、97 个测试函数通过；未调用真实模型 API。
+
 ## 全局垃圾与机器人网站屏蔽
 
 - [x] 审查频道一、二、三、PWG、应变片专题的搜索入口、复搜路径、来源规则和 Streamlit 配置传递。

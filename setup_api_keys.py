@@ -13,8 +13,6 @@ SECRET_KEYS = [
     "TAVILY_API_KEY",
     "EXA_API_KEY",
     "JINA_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
     "GITHUB_TOKEN",
     "GIST_ID",
 ]
@@ -23,11 +21,14 @@ LEGACY_SECRET_KEYS = [
     "DEEPSEEK_API_KEY",
     "DASHSCOPE_API_KEY",
     "QWEN_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
 ]
 
 LEGACY_SETTING_KEYS = [
     "QWEN_MODEL_ID",
     "QWEN_BASE_URL",
+    "OPENROUTER_BASE_URL",
 ]
 
 PERSISTED_SECRET_KEYS = SECRET_KEYS + LEGACY_SECRET_KEYS
@@ -35,10 +36,6 @@ PERSISTED_SECRET_KEYS = SECRET_KEYS + LEGACY_SECRET_KEYS
 SETTING_KEYS = {
     "OPENROUTER_MODEL_ID": {
         "default": "qwen/qwen3.7-flash",
-        "choices": None,
-    },
-    "OPENROUTER_BASE_URL": {
-        "default": "https://openrouter.ai/api/v1",
         "choices": None,
     },
     "OPENROUTER_REASONING_EFFORT": {
@@ -184,8 +181,8 @@ def _print_status(values: dict, path: Path) -> None:
         print(f"{key}: {values.get(key, spec['default']) or spec['default']}")
 
     print("")
-    if not values.get("OPENROUTER_API_KEY") and not values.get("GEMINI_API_KEY") and not values.get("GOOGLE_API_KEY"):
-        print("Warning: no active OpenRouter or Gemini model API key is configured.")
+    if not values.get("OPENROUTER_API_KEY"):
+        print("Warning: no active OpenRouter model API key is configured.")
     if not values.get("EXA_API_KEY"):
         print("Warning: channel 3 currently requires EXA_API_KEY in this codebase.")
     if not values.get("TAVILY_API_KEY"):
