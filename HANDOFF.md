@@ -1,5 +1,186 @@
 # HANDOFF.md
 
+## 0N. 2026-08-17 更新：全局垃圾与机器人网站屏蔽
+
+### 根因
+
+- 原代码只有 Tavily 的社交站点排除、新闻来源质量降权和各专题自己的零散低质量判断，没有统一的硬拦截层。
+- Exa、Tavily、频道三查询包、PWG 和应变片 collector 的调用路径不同，单改某一供应商或某一频道会留下旁路。
+- 原前端只能设置重点搜索源，不能在不改代码的情况下临时屏蔽新发现的自动聚合站。
+
+### 实现
+
+- 新增 `tools/source_blocklist.json`：集中维护 23 个保守的自动聚合、低可信转载和非正文平台域名，以及 12 个明确的机器人/AI/RSS 自动生成声明。
+- 新增 `tools/source_blocklist.py`：支持完整 URL、域名、`www.`、端口、路径、IDN、`*.` 输入规范化；采用“域名完全相同或真实子域名”匹配，避免 `notexample.com` 被 `example.com` 误伤。
+- `tools/search_engine.py` 在 Exa 请求中发送 `excludeDomains`，在 Tavily 请求中发送 `exclude_domains`；供应商返回后再执行本地复检。Exa 的 `company/people` 类别不发送官方不支持的排除参数，但仍执行本地复检。
+- 搜索诊断新增 `source_blocking`，记录拦截总数、按域名/类别统计和最多 20 条抽样原因。
+- `agent_app.py` 侧栏新增 `信息源屏蔽`：可粘贴域名或完整 URL、查看规范化数量和无效项、展开内置名单。手动规则已传入频道一初搜及标题复搜、频道二、频道三初搜及验证搜索、PWG 和应变片专题。
+- `setup_api_keys.py` 新增 `NEWS_BLOCKED_DOMAINS`；也可直接使用同名环境变量。
+- PWG 与应变片 collector 对自定义 `search_fn` 返回结果再次本地检查，避免测试 stub 或未来替代搜索实现绕过门禁；Google Patents 兜底也执行同一检查。
+- PWG 从历史 raw JSON 重建日报/周报时会按当前名单再次过滤，避免旧缓存重新进入报告或机会表；原始 JSON 不会被改写。
+
+### 文件
+
+- 新增：`tools/source_blocklist.py`、`tools/source_blocklist.json`、`tests/test_source_blocklist.py`、`docs/SOURCE_BLOCKLIST_GUIDE_CN.md`。
+- 修改：`tools/search_engine.py`、`tools/consumer_topic_query_packs.py`、`pwg_intelligence/collector.py`、`pwg_intelligence/reporter.py`、`strain_gauge_intelligence/collector.py`、`agent_app.py`、`setup_api_keys.py`、`README.md`、`docs/PWG_INTELLIGENCE_GUIDE_CN.md`、`docs/STRAIN_GAUGE_SENSOR_MODULE_GUIDE_CN.md`、`PLANS.md`。
+
+### 验证
+
+- `python tests/test_source_blocklist.py`：8 项通过。
+- 全量 `tests/test_*.py`：13 个测试脚本、96 个测试函数全部通过；频道一标题门禁、频道三 Exa 广度/完整链、PWG collector/报告重建、应变片专题均包含在回归范围内。
+- `python -m py_compile agent_app.py setup_api_keys.py tools/source_blocklist.py tools/search_engine.py tools/consumer_topic_query_packs.py pwg_intelligence/collector.py strain_gauge_intelligence/collector.py agents/deep_analyst.py agents/timeline_agent.py tools/export_ppt.py tools/export_word.py tools/report_linker.py tests/test_source_blocklist.py`：通过。
+- `tools/source_blocklist.json` 自动解析检查通过：23 个域名、12 个自动内容标记。
+- Streamlit 浏览器实测：粘贴 2 个有效域名和 1 个无效值后，页面显示手动屏蔽 2 个域名并提示无效项；内置 23 条规则表可展开，页面无重叠。测试输入已清空。
+- 未调用真实 Exa/Tavily，也未消耗模型 API；本次门禁行为使用 provider stub 和真实请求 payload 捕获验证。
+
+### 风险与后续
+
+- 永久硬屏蔽的误伤成本高。当前名单有意保守；门户中仍可能存在原始报道的站点继续交给原有来源降权和人工复核，而不是全部硬封。
+- 自动生成声明只匹配配置中的强标记，无法识别不披露自动生产方式的新站点；应根据 `source_blocking` 诊断把反复出现的域名人工核实后加入 JSON。
+- 手动规则覆盖域名全部子域。输入企业官网主域前应确认不会同时屏蔽其新闻中心、论文或专利页面。
+
+## 0M. 2026-08-17 更新：OpenRouter 通用多模型适配
+
+本次在 0L 的 OpenRouter Qwen3.7 Flash 迁移基础上，将模型层升级为 OpenRouter 通用方案。`qwen/qwen3.7-flash` 仍是默认值，但不再是代码能力假设或前端可选范围；用户可从实时模型目录选择其他厂商模型，也可直接填写任意 OpenRouter 模型 ID。
+
+### 根因与设计边界
+
+- 旧实现对所有 OpenRouter 模型固定发送 Qwen 使用的 `reasoning`、`response_format`、`temperature` 和 8,192 `max_tokens`。
+- OpenRouter 每个模型的 `supported_parameters` 和最大输出不同；直接替换模型 ID 可能导致无可用端点、参数被忽略、输出上限越界或结构化结果失败。
+- 新实现不做自动模型替换，避免在用户不知情时改变费用、质量或数据策略。兼容回退只移除当前模型明确不支持的请求参数。
+- DeepSeek 直连接口继续禁用。OpenRouter 目录不会按模型厂商品牌过滤；若用户主动选择 `deepseek/...`，请求仍只发送到 OpenRouter，而不是 `api.deepseek.com`。
+
+### 通用模型目录
+
+- `tools/llm_driver.py` 新增 `OpenRouterModelInfo`、`fetch_openrouter_model_catalog()`、`build_openrouter_model_options()` 和 `find_openrouter_model_info()`。
+- 目录请求使用 `GET /api/v1/models`，限定 `output_modalities=text` 并按 `most-popular` 排序。
+- 只保留可接受文本输入且输出文本的模型，记录：模型 ID、名称、上下文、最大 completion、支持参数、输入/输出模态和到期时间。
+- Streamlit 对目录缓存 1 小时，并提供“刷新 OpenRouter 模型目录”按钮。目录加载失败不会阻断自定义模型调用。
+- 前端模型下拉支持搜索完整目录；`OPENROUTER_MODEL_ID` 仍是自由字符串，不需要修改 Python 代码即可换模型。
+
+### 能力自适应
+
+- `structured_outputs`：优先发送 `response_format.type=json_schema`、Pydantic Schema 和 `strict=true`。
+- `response_format`：不支持严格 Schema 但支持 JSON mode 时，发送 `response_format.type=json_object`。
+- 两者都不支持：保留 JSON system prompt，并用本地 Pydantic 做最终结构验证。
+- `reasoning`：仅在目录声明支持时发送；`auto` 表示不发送 reasoning 参数，其他选项为 `none/minimal/low/medium/high/xhigh`。
+- `temperature`、`max_tokens`：目录未声明支持时不发送；输出长度自动取业务请求值与 `top_provider.max_completion_tokens` 的较小值。
+- 所有能力参数继续配合 `provider.require_parameters=true`，只路由到支持当前参数组合的端点。
+- 对目录未知模型或端点能力临时变化，只在明确的参数兼容错误下，按 `reasoning`、严格结构化输出、JSON mode、temperature、max_tokens 逐项降级后重试。
+
+### 前端和配置
+
+- `agent_app.py` 页面标题改为“OpenRouter 多模型部门情报中心”，模型控件改为“OpenRouter 核心模型（可搜索）”。
+- 选中模型后显示上下文、最大输出、结构化输出模式、reasoning、tools 和到期信息。
+- 频道一、频道二、频道三调用均传入当前模型元数据；频道四和应变片专题仍不调用 LLM。
+- 频道三运行提示显示实际 `model_id`，不再写死 Qwen3.7 Flash。
+- Gemini 可选主模型/轻任务模型的回退提示改为“当前 OpenRouter 模型”。
+- `tools/export_word.py` 标题改为“AI 企业级深度科技研报”。
+- `setup_api_keys.py` 的 `OPENROUTER_MODEL_ID` 继续支持任意字符串，`OPENROUTER_REASONING_EFFORT` 增加 `auto` 和 `xhigh`。
+
+### 修改文件
+
+- `tools/llm_driver.py`
+- `agent_app.py`
+- `setup_api_keys.py`
+- `tools/export_word.py`
+- `tests/test_qwen_llm_driver.py`（沿用历史文件名，内容已升级为通用 OpenRouter 多模型测试）
+- `PLANS.md`
+- `HANDOFF.md`
+
+### 本地验证
+
+- OpenRouter 公共目录真实请求成功：本次解析出 414 个文本工作流模型，其中 335 个声明 `structured_outputs`、356 个声明 `response_format`、283 个声明 `reasoning`。
+- 默认 `qwen/qwen3.7-flash` 被正确识别为 1,000,000 上下文、65,536 最大输出，支持 JSON mode、reasoning 和 tools。
+- 浏览器实际切换到 `amazon/nova-micro-v1`：页面识别为 128,000 上下文、5,120 最大输出、不支持 reasoning 和 JSON mode，并显示“Prompt + 本地校验”；随后恢复默认 Qwen。
+- 浏览器输入目录外自定义 ID `vendor/new-model-alias`：前端保留该 ID、显示目录未验证提示并启用保守参数降级，没有强制替换模型；验证后已恢复默认模型。
+- OpenRouter 多模型专项 stub：10 项通过，覆盖目录解析、任意 ID、严格 Schema、JSON mode、纯文本模型、token 上限、参数兼容回退、`auto/xhigh` 和 DeepSeek 强制禁用。
+- 全量 `tests/test_*.py`：12 个测试脚本、87 项测试全部通过。
+- `python -m compileall -q agent_app.py agents tools pwg_intelligence strain_gauge_intelligence setup_api_keys.py tests`：通过。
+- 运行时审计未发现 `api.deepseek.com`、`deepseek-chat`、旧 DeepSeek/DashScope/Qwen 密钥读取或 DeepSeek provider。
+- Streamlit 已完整重启并运行在 `http://127.0.0.1:8506`；模型目录、能力提示和五个频道均正常，无页面级导入错误。
+
+### 尚未完成
+
+- 本机 `OPENROUTER_API_KEY` 仍为 `missing`，因此没有执行收费模型的真实 Chat Completions 请求，也没有声称完成真实模型端到端验证。
+- 配置 Key 后，建议至少真实验证两类模型：一类支持 `structured_outputs`，另一类不支持 JSON/reasoning，以覆盖两条生产路径。
+
+### 官方依据
+
+- `https://openrouter.ai/docs/guides/overview/models`
+- `https://openrouter.ai/docs/api/api-reference/models/get-models`
+- `https://openrouter.ai/docs/guides/features/structured-outputs`
+- `https://openrouter.ai/docs/guides/routing/provider-selection`
+- `https://openrouter.ai/docs/guides/best-practices/reasoning-tokens`
+
+## 0L. 2026-08-17 更新：DeepSeek 暂停，主模型迁移到 OpenRouter Qwen3.7 Flash
+
+本次按用户确认的 OpenRouter 接入方式完成主模型切换。DeepSeek 运行接口已停用：应用不再读取 `DEEPSEEK_API_KEY`，不再创建 DeepSeek client，也不会在 OpenRouter 或 Gemini 不可用时自动回退到 DeepSeek。旧 DeepSeek、DashScope 和 Qwen Key 仅由配置脚本原样保留，避免覆盖用户已有配置，但不会参与请求。
+
+### 模型与接口核验
+
+- OpenRouter 的正式模型 ID 为 `qwen/qwen3.7-flash`，默认 API Base URL 为 `https://openrouter.ai/api/v1`。
+- OpenRouter 模型页与公开 Models API 显示：该模型上下文长度为 1,000,000 token，最大 completion 为 65,536 token，支持文本、图片和视频输入。
+- Models API 列出的请求能力包含 `reasoning`、`response_format`、`tools`、`tool_choice`、`temperature`、`top_p` 和 `max_tokens`。
+- 当前模型未在 Models API 中声明严格 `json_schema` structured output，因此结构化任务使用兼容性更高的 `response_format={"type":"json_object"}`，同时在 system prompt 中附带 Pydantic JSON Schema。
+- OpenRouter Qwen 默认设置 `reasoning={"effort":"none","exclude":true}`，避免推理内容混入 JSON；前端可选择 `none/minimal/low/medium/high`。
+- 请求附带 `provider.require_parameters=true`，要求 OpenRouter 只路由到支持当前参数的上游端点。
+- 官方依据：
+  - `https://openrouter.ai/qwen/qwen3.7-flash`
+  - `https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion`
+  - `https://openrouter.ai/docs/guides/features/structured-outputs`
+  - `https://openrouter.ai/docs/guides/best-practices/reasoning-tokens`
+  - `https://openrouter.ai/docs/guides/routing/provider-selection`
+
+### 修改文件与行为
+
+- 新增 `tools/llm_driver.py`
+  - 统一封装 OpenRouter Qwen 与保留的 Gemini 可选驱动。
+  - OpenRouter 默认模型为 `qwen/qwen3.7-flash`，默认输出上限 8,192 token，请求超时 120 秒，SDK 重试 2 次。
+  - 结构化请求使用 JSON mode；仅当服务明确拒绝 `response_format` 时，才降级为纯文本 JSON 指令重试。
+  - `provider="deepseek"` 不解析 Base URL，驱动保持无效状态。
+- 修改 `agent_app.py`
+  - 页面标题改为 `OpenRouter Qwen 部门情报中心`。
+  - 运行时读取 `OPENROUTER_API_KEY`、`OPENROUTER_MODEL_ID`、`OPENROUTER_BASE_URL` 和 `OPENROUTER_REASONING_EFFORT`。
+  - 侧边栏提供 Qwen3.7 Flash、Qwen3.7 Plus、Qwen3.6 Flash、自定义模型 ID、API 地址和推理强度配置。
+  - 频道一、频道二、频道三主模型全部使用统一 OpenRouter 驱动；频道四和应变片专题原本不调用 LLM，行为保持不变。
+  - Gemini 仍是显式可选的主模型/轻任务模型；Gemini 不可用时只能回退到 OpenRouter Qwen。
+- 修改 `setup_api_keys.py`
+  - 新增 OpenRouter 密钥与模型设置；旧 DeepSeek、DashScope/Qwen 密钥和旧 Qwen 设置标记为 `disabled; preserved only`。
+  - `--show` 只输出 `configured/missing`，不打印 Key 内容或首尾字符。
+- 修改 `agents/qa_agent.py`，文本问答通过统一驱动发送，使 OpenRouter reasoning 设置同样生效。
+- 修改 `tools/consumer_daily_validation.py`，新增供应商无关名称 `verified_package_to_llm_material()`，旧函数名仅作为兼容别名保留。
+- 修改 `tools/export_word.py`，Word 报告标题从 DeepSeek 品牌切换为 Qwen。
+- 修改 `docs/PWG_INTELLIGENCE_GUIDE_CN.md`，明确历史 DeepSeek 离线复核仅作为归档，PWG 前端仍不调用 LLM。
+- 新增 `tests/test_qwen_llm_driver.py`，覆盖 OpenRouter 请求参数、JSON mode 降级、推理强度和 DeepSeek 禁用。
+
+### 本地配置
+
+```powershell
+cd E:\Users\zwz10\PycharmProjects\collectNews\collectNews-main
+python setup_api_keys.py
+```
+
+在 `OPENROUTER_API_KEY` 提示处直接粘贴 OpenRouter Key。默认 `OPENROUTER_MODEL_ID` 保持 `qwen/qwen3.7-flash`，默认 `OPENROUTER_BASE_URL` 保持 `https://openrouter.ai/api/v1`。可用 `python setup_api_keys.py --show` 检查状态，该命令不会打印 Key 明文。
+
+### 验证结果
+
+- OpenRouter 公共 Models API 实查通过：`qwen/qwen3.7-flash` 存在，上下文 1,000,000，最大 completion 65,536，并声明支持 `reasoning`、`response_format` 和工具参数。
+- `python -m py_compile agent_app.py tools\llm_driver.py setup_api_keys.py agents\qa_agent.py tools\consumer_daily_validation.py tools\export_word.py tests\test_qwen_llm_driver.py`：通过。
+- `python -m compileall -q agent_app.py agents tools pwg_intelligence strain_gauge_intelligence setup_api_keys.py tests`：通过。
+- `python tests\test_qwen_llm_driver.py`：6 项通过，覆盖模型 ID、Base URL、JSON mode、reasoning、`provider.require_parameters`、response-format 兼容降级、DeepSeek provider 禁用和前端密钥读取约束。
+- 全部 `tests/test_*.py`：12 个测试脚本、82 项测试全部通过。
+- 运行时静态审计：`agent_app.py`、`agents/`、`tools/` 中没有 DeepSeek API URL、`deepseek-chat`、DeepSeek/DashScope/Qwen 旧密钥读取或 DeepSeek provider；底层 `chat.completions.create()` 只保留在统一驱动内一处。
+- Streamlit 已在 `http://127.0.0.1:8506` 重新启动。浏览器检查确认 OpenRouter Qwen3.7 Flash、模型 ID、API 地址、推理强度、DeepSeek 停用提示和五个频道均存在，未出现 `Traceback`、`ImportError` 或 `ModuleNotFoundError`。
+- 从迁移前已运行的 Streamlit 进程直接热重载会保留旧模块缓存，并曾触发一次常量导入错误；完整重启进程后已消失。部署或本地升级后必须重启 Streamlit，不应只依赖热重载。
+- `python setup_api_keys.py --show` 确认本机当前未配置 `OPENROUTER_API_KEY`；因此尚未执行真实 Qwen3.7 Flash 鉴权请求或频道一端到端生成，不能把公共 Models API、stub 或 UI 验证当成真实模型调用。
+
+### 风险与边界
+
+- OpenRouter 会在支持模型的多个上游间路由；`provider.require_parameters=true` 可保证参数兼容，但不固定具体上游。若需要固定供应商，后续需显式配置 provider order。
+- 目前使用 JSON mode 而非严格 `json_schema`，结构校验仍由本地 Pydantic 完成；模型返回字段不完整时，该次结构化结果会失败并触发现有业务兜底。
+- 代码和历史文档中仍可能出现 DeepSeek 文字：新闻检索对象/关键词、历史验证记录及兼容函数别名不属于 DeepSeek API 运行路径，不应批量删除。
+
 ## 0K. 2026-06-22 更新：新增应变片 / 机器人六轴力传感器独立专题模块
 
 本次新增独立技术专题模块“应变片与机器人六轴力传感器”。该模块不并入 Apple、Google、Tesla 等公司日更主题，不占用频道一或频道三详细新闻配额；前端作为独立 tab 触发。

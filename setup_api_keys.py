@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 SECRET_KEYS = [
-    "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY",
     "TAVILY_API_KEY",
     "EXA_API_KEY",
     "JINA_API_KEY",
@@ -19,7 +19,32 @@ SECRET_KEYS = [
     "GIST_ID",
 ]
 
+LEGACY_SECRET_KEYS = [
+    "DEEPSEEK_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "QWEN_API_KEY",
+]
+
+LEGACY_SETTING_KEYS = [
+    "QWEN_MODEL_ID",
+    "QWEN_BASE_URL",
+]
+
+PERSISTED_SECRET_KEYS = SECRET_KEYS + LEGACY_SECRET_KEYS
+
 SETTING_KEYS = {
+    "OPENROUTER_MODEL_ID": {
+        "default": "qwen/qwen3.7-flash",
+        "choices": None,
+    },
+    "OPENROUTER_BASE_URL": {
+        "default": "https://openrouter.ai/api/v1",
+        "choices": None,
+    },
+    "OPENROUTER_REASONING_EFFORT": {
+        "default": "none",
+        "choices": {"auto", "none", "minimal", "low", "medium", "high", "xhigh"},
+    },
     "CONSUMER_DAILY_SEARCH_PROVIDER": {
         "default": "exa",
         "choices": {"exa", "tavily", "hybrid"},
@@ -31,6 +56,10 @@ SETTING_KEYS = {
     "CONSUMER_DAILY_TIME_WINDOW": {
         "default": "72h",
         "choices": {"72h", "24h", "today", "7d"},
+    },
+    "NEWS_BLOCKED_DOMAINS": {
+        "default": "",
+        "choices": None,
     },
 }
 
@@ -53,11 +82,7 @@ def _read_existing(path: Path) -> dict:
 
 def _mask(value: str) -> str:
     value = str(value or "")
-    if not value:
-        return "missing"
-    if len(value) <= 8:
-        return "*" * len(value)
-    return f"{value[:4]}...{value[-4:]}"
+    return "configured" if value else "missing"
 
 
 def _toml_escape(value: str) -> str:
@@ -81,6 +106,18 @@ def _write_toml(path: Path, values: dict) -> None:
     for key in SECRET_KEYS:
         value = values.get(key, "")
         if value:
+            lines.append(f'{key} = "{_toml_escape(value)}"')
+
+    legacy_values = [(key, values.get(key, "")) for key in LEGACY_SECRET_KEYS if values.get(key, "")]
+    if legacy_values:
+        lines.extend(["", "# Disabled legacy keys are preserved but are not used by the application."])
+        for key, value in legacy_values:
+            lines.append(f'{key} = "{_toml_escape(value)}"')
+
+    legacy_settings = [(key, values.get(key, "")) for key in LEGACY_SETTING_KEYS if values.get(key, "")]
+    if legacy_settings:
+        lines.extend(["", "# Disabled legacy model settings are preserved for reference only."])
+        for key, value in legacy_settings:
             lines.append(f'{key} = "{_toml_escape(value)}"')
 
     for key, spec in SETTING_KEYS.items():
@@ -110,8 +147,11 @@ def _prompt_secret(key: str, current: str) -> str:
     return entered
 
 
-def _prompt_setting(key: str, current: str, default: str, choices: set[str]) -> str:
+def _prompt_setting(key: str, current: str, default: str, choices: set[str] | None) -> str:
     current = current or default
+    if not choices:
+        entered = input(f"{key} [{current}] (blank=keep): ").strip()
+        return entered or current
     choice_text = "/".join(sorted(choices))
     while True:
         entered = input(f"{key} [{current}] ({choice_text}, blank=keep): ").strip().lower()
@@ -124,7 +164,7 @@ def _prompt_setting(key: str, current: str, default: str, choices: set[str]) -> 
 
 def _apply_env(values: dict) -> dict:
     merged = dict(values)
-    for key in list(SECRET_KEYS) + list(SETTING_KEYS):
+    for key in list(PERSISTED_SECRET_KEYS) + list(SETTING_KEYS) + list(LEGACY_SETTING_KEYS):
         env_value = os.getenv(key, "").strip()
         if env_value:
             merged[key] = env_value
@@ -135,12 +175,17 @@ def _print_status(values: dict, path: Path) -> None:
     print(f"Secrets file: {path}")
     for key in SECRET_KEYS:
         print(f"{key}: {_mask(values.get(key, ''))}")
+    for key in LEGACY_SECRET_KEYS:
+        print(f"{key}: {_mask(values.get(key, ''))} (disabled; preserved only)")
+    for key in LEGACY_SETTING_KEYS:
+        if values.get(key, ""):
+            print(f"{key}: {values.get(key)} (disabled; preserved only)")
     for key, spec in SETTING_KEYS.items():
         print(f"{key}: {values.get(key, spec['default']) or spec['default']}")
 
     print("")
-    if not values.get("DEEPSEEK_API_KEY") and not values.get("GEMINI_API_KEY") and not values.get("GOOGLE_API_KEY"):
-        print("Warning: no model API key is configured.")
+    if not values.get("OPENROUTER_API_KEY") and not values.get("GEMINI_API_KEY") and not values.get("GOOGLE_API_KEY"):
+        print("Warning: no active OpenRouter or Gemini model API key is configured.")
     if not values.get("EXA_API_KEY"):
         print("Warning: channel 3 currently requires EXA_API_KEY in this codebase.")
     if not values.get("TAVILY_API_KEY"):

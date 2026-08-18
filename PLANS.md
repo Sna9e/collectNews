@@ -1,5 +1,49 @@
 # PLANS.md
 
+## 全局垃圾与机器人网站屏蔽
+
+- [x] 审查频道一、二、三、PWG、应变片专题的搜索入口、复搜路径、来源规则和 Streamlit 配置传递。
+- [x] 新增独立 `tools/source_blocklist.json`，集中维护自动聚合、低可信转载入口和非正文平台，不把名单散落到各频道。
+- [x] 新增域名规范化、完整 URL 解析、精确/子域名匹配和无效输入识别，避免字符串包含式误伤。
+- [x] 增加机器人/AI 自动生成及 RSS 自动聚合强标记过滤。
+- [x] Exa 使用 `excludeDomains`、Tavily 使用 `exclude_domains` 做请求前排除，并对所有返回结果执行本地二次门禁。
+- [x] 增加可审计诊断：拦截总数、域名、类别、原因和标题样本。
+- [x] Streamlit 侧栏增加手动屏蔽网站输入、内置名单预览和无效域名提示；规则覆盖当前五个频道及频道一标题二次搜索。
+- [x] 支持 `NEWS_BLOCKED_DOMAINS` 持久设置和环境变量，`setup_api_keys.py` 可写入配置。
+- [x] 增加专项测试并完成相关频道回归与前端浏览器检查。
+- [ ] 根据实际运行诊断定期复核内置名单；只有站点整体属于自动聚合或低可信转载入口时才升级为永久硬屏蔽。
+
+## OpenRouter 通用多模型适配
+
+- [x] 联网核对 OpenRouter Models API、`supported_parameters`、结构化输出、reasoning 和 provider routing 官方规则。
+- [x] 新增 `OpenRouterModelInfo` 标准模型元数据，记录模型 ID、名称、上下文、最大输出、输入/输出模态、支持参数和到期时间。
+- [x] 通过 `/api/v1/models?output_modalities=text&sort=most-popular` 动态加载文本模型目录，不再将前端模型选择限制在 Qwen 预设。
+- [x] 保留任意自定义模型 ID；模型目录不可用或自定义代理没有 `/models` 时，业务调用仍可继续。
+- [x] 按 `supported_parameters` 自适应发送 `temperature`、`max_tokens`、`reasoning`、`response_format` 和严格 `structured_outputs`。
+- [x] 结构化输出采用三级策略：严格 JSON Schema → JSON mode → Prompt JSON + 本地 Pydantic 校验。
+- [x] 根据 `top_provider.max_completion_tokens` 自动限制输出长度，避免切换到小输出模型后请求越界。
+- [x] 对目录未知或端点能力变化的模型，仅在明确参数兼容错误时逐项关闭不支持参数后重试；不静默切换到其他模型。
+- [x] DeepSeek 直连接口继续禁用，即使显式传入 DeepSeek Base URL 也不能创建 driver；OpenRouter 目录中的模型不按厂商品牌过滤。
+- [x] 前端、Gemini 回退提示、频道三运行提示和 Word 报告标题改为供应商中性文案。
+- [x] `setup_api_keys.py` 继续支持任意 `OPENROUTER_MODEL_ID`，推理设置扩展为 `auto/none/minimal/low/medium/high/xhigh`。
+- [x] 本地公共目录验证解析出 414 个文本模型，并验证 Qwen3.7 Flash 与不支持 reasoning/JSON mode 的模型均能正确识别能力。
+- [x] 多模型专项测试与全部现有测试通过；Streamlit 浏览器完成默认模型和非 Qwen 模型切换检查。
+- [ ] 配置有效 `OPENROUTER_API_KEY` 后，分别选取一个支持严格 JSON Schema 的模型和一个仅支持普通文本输出的模型执行真实端到端生成。
+
+## 主模型迁移：DeepSeek 暂停，切换 Qwen Flash
+
+- [x] 审查 `agent_app.py`、各 agent、API Key 脚本、导出层和前端中的 DeepSeek 运行时耦合点。
+- [x] 联网核验 OpenRouter 官方目录和公开 Models API，确认模型 ID 为 `qwen/qwen3.7-flash`，上下文 1M，最大输出 65536 token。
+- [x] 新增独立 `tools/llm_driver.py`，通过 OpenRouter OpenAI 兼容接口接入 Qwen3.7 Flash。
+- [x] Qwen 结构化任务使用 JSON mode、`provider.require_parameters=true` 和 OpenRouter 统一 `reasoning` 参数，默认 `effort=none`。
+- [x] OpenRouter 请求增加 120 秒超时、2 次 SDK 重试、8192 输出 token 上限和结构化输出兼容回退。
+- [x] `agent_app.py` 停止读取 `DEEPSEEK_API_KEY`，不再包含 DeepSeek provider 或自动回退路径。
+- [x] Streamlit 前端替换为 OpenRouter Qwen 模型选择、推理强度和可编辑 API Base URL。
+- [x] `setup_api_keys.py` 支持 `OPENROUTER_API_KEY`、`OPENROUTER_MODEL_ID`、`OPENROUTER_BASE_URL`、`OPENROUTER_REASONING_EFFORT`；旧 DeepSeek/DashScope Key 仅保留，不参与运行。
+- [x] Word 报告标题切换为 Qwen；PWG 当前“不调用大模型”的状态提示同步更新。
+- [x] 增加 Qwen stub 单元测试，并执行全部现有测试脚本和 Streamlit 浏览器检查。
+- [ ] 在本地配置有效 `OPENROUTER_API_KEY` 后执行一次真实 Qwen3.7 Flash 结构化调用和频道一端到端生成验证。
+
 ## 频道四：PWG 聚合物光波导技术与产品情报系统
 
 ### 第一阶段：数据模型和 Excel 骨架

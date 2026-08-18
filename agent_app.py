@@ -42,7 +42,7 @@ from tools.consumer_daily_validation import (
     normalize_time_window,
     raw_results_from_verified_topic,
     validate_consumer_daily_quality,
-    verified_package_to_deepseek_material,
+    verified_package_to_llm_material,
 )
 from tools.intelligence_packs import (
     build_focus_hint,
@@ -52,6 +52,19 @@ from tools.intelligence_packs import (
     get_default_sites_text,
     get_industry_topics,
     rank_results_by_pack,
+)
+from tools.llm_driver import (
+    AI_Driver,
+    DEFAULT_OPENROUTER_BASE_URL,
+    DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_OPENROUTER_REASONING_EFFORT,
+    OPENROUTER_REASONING_EFFORTS,
+    build_openrouter_model_options,
+    build_ai_stack,
+    fetch_openrouter_model_catalog,
+    find_openrouter_model_info,
+    format_model_stack_name,
+    normalize_model_base_url,
 )
 from tools.memory_manager import GistMemoryManager
 from tools.report_linker import annotate_report_data
@@ -68,6 +81,7 @@ from tools.search_engine import (
     text_mentions_local_day,
     verify_selected_news_by_title_search,
 )
+from tools.source_blocklist import get_builtin_block_rules, parse_manual_blocklist
 from pwg_intelligence.collector import (
     DEFAULT_RAW_DIR as PWG_DEFAULT_RAW_DIR,
     collect_pwg_daily_scan,
@@ -165,11 +179,15 @@ def _load_local_secret_fallback():
     return _LOCAL_SECRET_CACHE
 
 import streamlit as st
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
 
-st.set_page_config(page_title="DeepSeek 部门情报中心", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="OpenRouter 多模型部门情报中心", page_icon="🧠", layout="wide")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_openrouter_model_catalog_cached(base_url, _api_key=""):
+    return fetch_openrouter_model_catalog(base_url=base_url, api_key=_api_key)
 
 SESSION_DEFAULTS = {
     "report_ready": False,
@@ -253,146 +271,6 @@ for session_key, default_value in SEARCH_UI_DEFAULTS.items():
         st.session_state[session_key] = default_value
 
 
-class AI_Driver:
-    def __init__(self, api_key, model_id, provider="deepseek"):
-        self.valid = False
-        self.provider = provider
-        self.model_id = model_id
-        self.base_url = self._resolve_base_url(provider)
-        if api_key and model_id and self.base_url:
-            try:
-                self.client = OpenAI(api_key=api_key, base_url=self.base_url)
-                self.valid = True
-            except Exception:
-                pass
-
-    @staticmethod
-    def _resolve_base_url(provider):
-        provider_key = str(provider or "").strip().lower()
-        if provider_key == "gemini":
-            return "https://generativelanguage.googleapis.com/v1beta/openai/"
-        if provider_key == "deepseek":
-            return "https://api.deepseek.com"
-        return ""
-
-    @property
-    def label(self):
-        if self.provider == "gemini":
-            return f"Gemini AI Studio/{self.model_id}"
-        return f"DeepSeek/{self.model_id}"
-
-    def _request_completion(self, messages, force_plain_json=False):
-        request_kwargs = {
-            "model": self.model_id,
-            "messages": messages,
-            "temperature": 0.1,
-            "max_tokens": 4096,
-        }
-        if not force_plain_json:
-            request_kwargs["response_format"] = {"type": "json_object"}
-        return self.client.chat.completions.create(**request_kwargs)
-
-    def analyze_structural(self, prompt, structure_class):
-        if not self.valid:
-            return None
-
-        sys_prompt = (
-            "必须严格按 JSON 格式返回，不要带任何思考过程或多余文字。"
-            f"JSON Schema 如下:\n{json.dumps(structure_class.model_json_schema(), ensure_ascii=False)}"
-        )
-
-        try:
-            messages = [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": prompt},
-            ]
-            try:
-                res = self._request_completion(messages)
-            except Exception:
-                if self.provider != "gemini":
-                    raise
-                # Gemini OpenAI compatibility is good enough for this workflow,
-                # but some accounts/features can reject json_object. Retry once
-                # with plain text JSON instructions so the toggle remains non-breaking.
-                res = self._request_completion(messages, force_plain_json=True)
-            content = res.choices[0].message.content.strip()
-            if content.startswith("```"):
-                content = content.strip("`").strip()
-                if content.lower().startswith("json"):
-                    content = content[4:].strip()
-
-            data = json.loads(content)
-            if isinstance(data, list):
-                data = {list(structure_class.model_fields.keys())[0]: data}
-            return structure_class(**data)
-        except Exception as e:
-            print(f"⚠️ AI 结构化解析失败: {e}")
-            return None
-
-
-def build_ai_stack(
-    deepseek_key,
-    deepseek_model,
-    use_gemini_light=False,
-    gemini_key="",
-    gemini_model=DEFAULT_GEMINI_LIGHT_MODEL,
-    use_gemini_main=False,
-    gemini_main_model=DEFAULT_GEMINI_MAIN_MODEL,
-):
-    deepseek_driver = AI_Driver(deepseek_key, deepseek_model, provider="deepseek")
-    heavy_driver = deepseek_driver
-    light_driver = heavy_driver
-    notices = []
-
-    if use_gemini_main:
-        gemini_heavy_driver = AI_Driver(gemini_key, gemini_main_model, provider="gemini")
-        if gemini_heavy_driver.valid:
-            heavy_driver = gemini_heavy_driver
-            light_driver = heavy_driver
-            notices.append(
-                f"主模型已切换到 {heavy_driver.label}；当前沿用同一套 Prompt 和输出结构。"
-            )
-        elif deepseek_driver.valid:
-            notices.append(
-                "已开启 Gemini AI Studio 主模型，但当前未检测到可用的 GEMINI_API_KEY / GOOGLE_API_KEY；本次自动回退为 DeepSeek。"
-            )
-        else:
-            heavy_driver = gemini_heavy_driver
-            light_driver = heavy_driver
-
-    if use_gemini_light:
-        gemini_driver = AI_Driver(gemini_key, gemini_model, provider="gemini")
-        if gemini_driver.valid:
-            if heavy_driver.valid and heavy_driver.provider == "gemini" and heavy_driver.model_id == gemini_model:
-                light_driver = heavy_driver
-                notices.append(
-                    f"轻任务引擎与主模型共用 {light_driver.label}。"
-                )
-            else:
-                light_driver = gemini_driver
-                if heavy_driver.provider == "gemini":
-                    notices.append(
-                        f"主模型使用 {heavy_driver.label}，轻任务使用 {light_driver.label}。"
-                    )
-                else:
-                    notices.append(
-                        f"轻任务引擎已切换到 {light_driver.label}；DeepSeek 继续负责最终成稿和金融分析。"
-                    )
-        else:
-            notices.append(
-                "已开启 Gemini AI Studio 轻任务引擎，但当前未检测到可用的 GEMINI_API_KEY / GOOGLE_API_KEY；本次自动回退为全 DeepSeek。"
-            )
-
-    return heavy_driver, light_driver, notices
-
-
-def format_model_stack_name(heavy_driver, light_driver):
-    if light_driver and light_driver.valid and light_driver.provider != heavy_driver.provider:
-        return f"{heavy_driver.label} + {light_driver.label}"
-    return heavy_driver.label
-
-
-
 def normalize_search_provider(provider):
     provider_key = str(provider or DEFAULT_SEARCH_PROVIDER).strip().lower()
     if provider_key in {"tavily", "exa", "hybrid"}:
@@ -458,7 +336,25 @@ def format_gemini_model_option(model_name):
     return labels.get(model_name, model_name)
 
 
-def resolve_gemini_model_name(selected_model, custom_model, fallback_model):
+def format_openrouter_model_option(model_name, catalog_by_id=None):
+    if model_name == "__custom__":
+        return "自定义模型 ID"
+    model_info = (catalog_by_id or {}).get(model_name)
+    if model_info:
+        return f"{model_info.name} · {model_info.model_id}"
+    if model_name == DEFAULT_OPENROUTER_MODEL:
+        return f"{model_name}（默认）"
+    return f"{model_name}（目录未验证）"
+
+
+def format_token_limit(value):
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return "未披露"
+
+
+def resolve_model_name(selected_model, custom_model, fallback_model):
     if selected_model == "__custom__":
         custom_value = str(custom_model or "").strip()
         return custom_value or fallback_model
@@ -551,6 +447,18 @@ def render_search_runtime_panel(run_metadata):
         )
     if provider_parts:
         st.caption("；".join(provider_parts))
+
+    source_blocking = diagnostics.get("source_blocking", {}) or {}
+    blocked_count = int(source_blocking.get("blocked_count", 0) or 0)
+    if blocked_count:
+        by_domain = source_blocking.get("by_domain", {}) or {}
+        top_domains = sorted(by_domain.items(), key=lambda item: int(item[1] or 0), reverse=True)[:5]
+        domain_summary = "、".join(f"{domain}（{count}）" for domain, count in top_domains)
+        st.caption(f"信息源门禁已拦截 {blocked_count} 条结果" + (f"：{domain_summary}" if domain_summary else ""))
+        samples = source_blocking.get("samples", []) or []
+        if samples:
+            with st.expander("查看本次信息源拦截记录", expanded=False):
+                st.dataframe(samples, width="stretch", hide_index=True)
 
     for notice in meta.get("notices", []) or []:
         st.warning(notice)
@@ -915,6 +823,7 @@ def collect_company_search_results(
     search_provider=DEFAULT_SEARCH_PROVIDER,
     exa_key="",
     exa_settings=None,
+    blocked_domains=None,
 ):
     company_pack = company_pack or get_company_query_pack(topic)
     merged_results = []
@@ -937,6 +846,7 @@ def collect_company_search_results(
             provider=search_provider,
             exa_key=exa_key,
             exa_settings=exa_settings,
+            blocked_domains=blocked_domains,
         )
         for item in batch or []:
             url = item.get("url")
@@ -1371,13 +1281,28 @@ with st.sidebar:
 
         return default
 
-    api_key = _get_runtime_secret("DEEPSEEK_API_KEY", "")
+    openrouter_key = _get_runtime_secret("OPENROUTER_API_KEY", "")
+    configured_openrouter_model = str(
+        _get_runtime_secret("OPENROUTER_MODEL_ID", DEFAULT_OPENROUTER_MODEL) or DEFAULT_OPENROUTER_MODEL
+    ).strip()
+    configured_openrouter_base_url = normalize_model_base_url(
+        _get_runtime_secret("OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_BASE_URL)
+    ) or DEFAULT_OPENROUTER_BASE_URL
+    configured_openrouter_reasoning_effort = str(
+        _get_runtime_secret("OPENROUTER_REASONING_EFFORT", DEFAULT_OPENROUTER_REASONING_EFFORT)
+        or DEFAULT_OPENROUTER_REASONING_EFFORT
+    ).strip().lower()
+    if configured_openrouter_reasoning_effort not in OPENROUTER_REASONING_EFFORTS:
+        configured_openrouter_reasoning_effort = DEFAULT_OPENROUTER_REASONING_EFFORT
     gemini_key = _get_runtime_secret("GEMINI_API_KEY", "") or _get_runtime_secret("GOOGLE_API_KEY", "")
     tavily_key = _get_runtime_secret("TAVILY_API_KEY", "")
     exa_key = _get_runtime_secret("EXA_API_KEY", "")
     jina_key = _get_runtime_secret("JINA_API_KEY", "")
     gh_token = _get_runtime_secret("GITHUB_TOKEN", "")
     gist_id = _get_runtime_secret("GIST_ID", "")
+    configured_blocked_domains = _get_runtime_secret("NEWS_BLOCKED_DOMAINS", "")
+    if "manual_blocked_domains_text" not in st.session_state:
+        st.session_state.manual_blocked_domains_text = configured_blocked_domains
     requested_consumer_provider_config = normalize_search_provider(
         _get_runtime_secret("CONSUMER_DAILY_SEARCH_PROVIDER", DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER)
     )
@@ -1398,13 +1323,117 @@ with st.sidebar:
         st.session_state.consumer_daily_search_depth = consumer_daily_search_depth_config
     if "consumer_daily_time_window" not in st.session_state:
         st.session_state.consumer_daily_time_window = consumer_daily_time_window_config
-    if (api_key or gemini_key) and (tavily_key or exa_key):
+    if (openrouter_key or gemini_key) and (tavily_key or exa_key):
         st.success("🔐 部门专属安全引擎已连接")
     else:
         st.error("⚠️ 未检测到可用的搜索或模型密钥，请补充 API Key。")
 
     st.divider()
-    model_id = st.selectbox("核心模型", ["deepseek-chat"], index=0)
+    openrouter_base_url = normalize_model_base_url(
+        st.text_input(
+            "OpenRouter API 地址",
+            value=configured_openrouter_base_url,
+            key="openrouter_base_url",
+            help="默认使用 OpenRouter OpenAI 兼容接口 https://openrouter.ai/api/v1。",
+        )
+    ) or DEFAULT_OPENROUTER_BASE_URL
+    if st.button("刷新 OpenRouter 模型目录", key="refresh_openrouter_model_catalog"):
+        load_openrouter_model_catalog_cached.clear()
+
+    openrouter_model_catalog = ()
+    openrouter_catalog_error = ""
+    try:
+        openrouter_model_catalog = load_openrouter_model_catalog_cached(
+            openrouter_base_url,
+            _api_key=openrouter_key,
+        )
+    except Exception as exc:
+        openrouter_catalog_error = str(exc)
+
+    openrouter_catalog_by_id = {
+        model_info.model_id: model_info for model_info in openrouter_model_catalog
+    }
+    openrouter_model_options = build_openrouter_model_options(
+        openrouter_model_catalog,
+        configured_openrouter_model,
+    )
+    if "openrouter_model_choice" not in st.session_state:
+        st.session_state.openrouter_model_choice = configured_openrouter_model
+    elif st.session_state.openrouter_model_choice not in openrouter_model_options:
+        st.session_state.openrouter_model_choice = configured_openrouter_model
+    if "openrouter_model_custom" not in st.session_state:
+        st.session_state.openrouter_model_custom = ""
+    if "openrouter_reasoning_effort" not in st.session_state:
+        st.session_state.openrouter_reasoning_effort = configured_openrouter_reasoning_effort
+    openrouter_model_choice = st.selectbox(
+        "OpenRouter 核心模型（可搜索）",
+        openrouter_model_options,
+        key="openrouter_model_choice",
+        format_func=lambda value: format_openrouter_model_option(value, openrouter_catalog_by_id),
+    )
+    openrouter_model_custom = st.text_input(
+        "OpenRouter 自定义模型 ID",
+        key="openrouter_model_custom",
+        disabled=(openrouter_model_choice != "__custom__"),
+        placeholder="例如：qwen/qwen3.7-flash",
+    )
+    model_id = resolve_model_name(
+        openrouter_model_choice,
+        openrouter_model_custom,
+        DEFAULT_OPENROUTER_MODEL,
+    )
+    openrouter_model_info = find_openrouter_model_info(openrouter_model_catalog, model_id)
+    openrouter_reasoning_effort = st.selectbox(
+        "OpenRouter 模型推理设置",
+        OPENROUTER_REASONING_EFFORTS,
+        key="openrouter_reasoning_effort",
+        format_func=lambda value: {
+            "auto": "模型默认（不发送 reasoning 参数）",
+            "none": "关闭（默认，结构化输出优先）",
+            "minimal": "最小",
+            "low": "低",
+            "medium": "中",
+            "high": "高",
+            "xhigh": "极高",
+        }.get(value, value),
+    )
+    st.caption("DeepSeek 运行接口已停用；应用不会读取 DEEPSEEK_API_KEY，也不会自动回退到 DeepSeek。")
+    if openrouter_key:
+        st.caption(
+            f"当前主模型：OpenRouter/{model_id}。"
+            f"推理设置：{openrouter_reasoning_effort}。"
+        )
+    else:
+        st.warning("未配置 OPENROUTER_API_KEY，当前 OpenRouter 主模型暂不可用。")
+
+    if openrouter_model_info:
+        supported_parameters = set(openrouter_model_info.supported_parameters)
+        if "structured_outputs" in supported_parameters:
+            structured_mode_label = "严格 JSON Schema"
+        elif "response_format" in supported_parameters:
+            structured_mode_label = "JSON mode"
+        else:
+            structured_mode_label = "Prompt + 本地校验"
+        st.caption(
+            f"模型目录：{openrouter_model_info.name}；"
+            f"上下文 {format_token_limit(openrouter_model_info.context_length)} token；"
+            f"最大输出 {format_token_limit(openrouter_model_info.max_completion_tokens)} token；"
+            f"结构化输出 {structured_mode_label}；"
+            f"reasoning {'支持' if 'reasoning' in supported_parameters else '不支持，设置将自动忽略'}；"
+            f"tools {'支持' if 'tools' in supported_parameters else '不支持'}。"
+        )
+        if openrouter_model_info.expiration_date:
+            st.warning(f"该模型目录标记的到期时间为 {openrouter_model_info.expiration_date}，请提前切换模型。")
+    elif openrouter_catalog_error:
+        st.warning(
+            "未能加载 OpenRouter 模型目录，仍可直接填写模型 ID；"
+            f"运行时会执行参数兼容降级。目录错误：{openrouter_catalog_error}"
+        )
+    else:
+        st.warning("当前模型 ID 未在 OpenRouter 文本模型目录中找到；仍允许调用，但会启用保守兼容降级。")
+
+    if openrouter_model_catalog:
+        st.caption(f"已加载 {len(openrouter_model_catalog)} 个可用于当前文本工作流的 OpenRouter 模型。")
     use_gemini_main = st.toggle(
         "使用 Gemini AI Studio 作为主模型（保留当前 Prompt）",
         key="use_gemini_main",
@@ -1429,7 +1458,7 @@ with st.sidebar:
         disabled=(not use_gemini_main or gemini_main_model_choice != "__custom__"),
         placeholder="例如：gemini-3.1-flash-lite-preview",
     )
-    gemini_main_model = resolve_gemini_model_name(
+    gemini_main_model = resolve_model_name(
         gemini_main_model_choice,
         gemini_main_model_custom,
         DEFAULT_GEMINI_MAIN_MODEL,
@@ -1441,7 +1470,7 @@ with st.sidebar:
                 " `Gemini 3.1 Flash-Lite` 这里按公开命名规则做了预设，若你的账号尚未开放该预览 ID，可改回 Gemini 3 Flash 或手动填写。"
             )
         else:
-            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为 DeepSeek。")
+            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为当前 OpenRouter 模型。")
     use_gemini_light = st.toggle("启用 Gemini AI Studio 轻任务引擎（保留当前主功能）", key="use_gemini_light")
     gemini_light_model_choice = st.selectbox(
         "Gemini 轻任务模型",
@@ -1456,16 +1485,16 @@ with st.sidebar:
         disabled=(not use_gemini_light or gemini_light_model_choice != "__custom__"),
         placeholder="例如：gemini-3.1-flash-lite-preview",
     )
-    gemini_light_model = resolve_gemini_model_name(
+    gemini_light_model = resolve_model_name(
         gemini_light_model_choice,
         gemini_light_model_custom,
         DEFAULT_GEMINI_LIGHT_MODEL,
     )
     if use_gemini_light:
         if gemini_key:
-            st.caption("当前按 Google AI Studio 的 OpenAI 兼容接口接入。轻任务包括：事件主档抽取、切片候选提取。最终长新闻成稿仍由 DeepSeek 负责。")
+            st.caption("当前按 Google AI Studio 的 OpenAI 兼容接口接入。轻任务包括：事件主档抽取、切片候选提取。最终长新闻成稿仍由当前 OpenRouter 模型负责。")
         else:
-            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为全 DeepSeek，不影响现有功能。")
+            st.caption("当前未配置 GEMINI_API_KEY 或 GOOGLE_API_KEY，开启后会自动回退为全 OpenRouter 模型栈，不影响现有功能。")
     time_opt = st.selectbox("回溯时间线", ["过去 24 小时", "过去 1 周", "过去 1 个月"], index=0)
     search_provider = st.selectbox(
         "搜索引擎",
@@ -1475,6 +1504,40 @@ with st.sidebar:
     )
     enable_finance_chain = st.toggle("上市公司金融补链（更耗 token）", value=False)
     time_limit_dict = {"过去 24 小时": "d", "过去 1 周": "w", "过去 1 个月": "m"}
+
+    with st.expander("🛡️ 信息源屏蔽", expanded=False):
+        builtin_block_rules = get_builtin_block_rules()
+        st.caption(
+            f"内置 {len(builtin_block_rules)} 条域名规则，并检测明确的机器人/AI 自动生成声明。"
+            "手动规则对当前五个频道和标题二次搜索同时生效。"
+        )
+        manual_blocked_domains_text = st.text_area(
+            "手动屏蔽网站",
+            key="manual_blocked_domains_text",
+            height=120,
+            placeholder="每行一个域名或完整 URL，例如：\nspam.example.com\nhttps://robot.example.org/news/123",
+            help="支持换行、逗号或分号分隔；屏蔽域名会同时覆盖其全部子域名。",
+        )
+        manual_blocked_domains, invalid_blocked_domain_tokens = parse_manual_blocklist(
+            manual_blocked_domains_text
+        )
+        st.caption(f"当前手动屏蔽 {len(manual_blocked_domains)} 个域名。")
+        if invalid_blocked_domain_tokens:
+            invalid_preview = "、".join(invalid_blocked_domain_tokens[:5])
+            st.warning(f"以下输入不是有效域名，已忽略：{invalid_preview}")
+        if st.checkbox("查看内置屏蔽名单", key="show_builtin_source_blocklist"):
+            st.dataframe(
+                [
+                    {
+                        "域名": rule.get("domain", ""),
+                        "类别": rule.get("category", ""),
+                        "原因": rule.get("reason", ""),
+                    }
+                    for rule in builtin_block_rules
+                ],
+                width="stretch",
+                hide_index=True,
+            )
 
     with st.expander("⚙️ 高级搜索源设置"):
         sites = st.text_area("重点搜索源", get_default_sites_text(), height=250)
@@ -1552,8 +1615,11 @@ if not st.session_state.report_ready:
         if start_btn and active_search_provider:
             topics = [topic.strip() for topic in query_input.split("\\") if topic.strip()]
             ai, light_ai, ai_notices = build_ai_stack(
-                api_key,
+                openrouter_key,
                 model_id,
+                openrouter_base_url=openrouter_base_url,
+                openrouter_reasoning_effort=openrouter_reasoning_effort,
+                openrouter_model_info=openrouter_model_info,
                 use_gemini_light=use_gemini_light,
                 gemini_key=gemini_key,
                 gemini_model=gemini_light_model,
@@ -1561,7 +1627,7 @@ if not st.session_state.report_ready:
                 gemini_main_model=gemini_main_model,
             )
             if not ai.valid:
-                st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
+                st.error("当前没有可用的主模型密钥。请配置 OPENROUTER_API_KEY，或开启 Gemini 主模型。")
                 st.stop()
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
@@ -1589,6 +1655,7 @@ if not st.session_state.report_ready:
                         search_provider=active_search_provider,
                         exa_key=exa_key,
                         exa_settings=exa_search_settings,
+                        blocked_domains=manual_blocked_domains,
                     )
                     if not raw_results:
                         empty_warning = f"未召回到符合条件的 {topic} 新闻，请扩大搜索源或放宽时间范围。"
@@ -1667,6 +1734,7 @@ if not st.session_state.report_ready:
                                 exa_key=exa_key,
                                 exa_settings=exa_search_settings,
                                 now=current_dt,
+                                blocked_domains=manual_blocked_domains,
                             )
                             crawl_result["warnings"] = list(crawl_result.get("warnings", [])) + list(title_review_warnings)
                         if len(deduped_news or []) < 2:
@@ -1805,21 +1873,31 @@ if not st.session_state.report_ready:
             query_suffix="",
             search_provider_override=None,
             exa_settings_override=None,
-            force_deepseek=False,
+            force_openrouter=False,
             status_label="",
         ):
             resolved_search_provider = search_provider_override or active_search_provider
             resolved_search_settings = exa_settings_override or exa_search_settings
             effective_search_notices = [] if search_provider_override else list(search_notices or [])
 
-            if force_deepseek:
-                ai = AI_Driver(api_key, model_id, provider="deepseek")
+            if force_openrouter:
+                ai = AI_Driver(
+                    openrouter_key,
+                    model_id,
+                    provider="openrouter",
+                    base_url=openrouter_base_url,
+                    reasoning_effort=openrouter_reasoning_effort,
+                    model_info=openrouter_model_info,
+                )
                 light_ai = ai
-                ai_notices = ["本频道固定使用 DeepSeek 生成，不启用 Gemini 主模型或轻任务模型。"]
+                ai_notices = ["本频道固定使用当前 OpenRouter 模型生成，不启用 Gemini 主模型或轻任务模型。"]
             else:
                 ai, light_ai, ai_notices = build_ai_stack(
-                    api_key,
+                    openrouter_key,
                     model_id,
+                    openrouter_base_url=openrouter_base_url,
+                    openrouter_reasoning_effort=openrouter_reasoning_effort,
+                    openrouter_model_info=openrouter_model_info,
                     use_gemini_light=use_gemini_light,
                     gemini_key=gemini_key,
                     gemini_model=gemini_light_model,
@@ -1827,10 +1905,10 @@ if not st.session_state.report_ready:
                     gemini_main_model=gemini_main_model,
                 )
             if not ai.valid:
-                if force_deepseek:
-                    st.error("当前没有可用的 DeepSeek 密钥。频道三固定使用 DEEPSEEK_API_KEY。")
+                if force_openrouter:
+                    st.error("当前没有可用的 OpenRouter 模型密钥。请配置 OPENROUTER_API_KEY。")
                 else:
-                    st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
+                    st.error("当前没有可用的主模型密钥。请配置 OPENROUTER_API_KEY，或开启 Gemini 主模型。")
                 return [], [], "未启用模型", {}
             current_dt = datetime.datetime.now(LOCAL_TZ)
             current_date_str = current_dt.strftime("%Y年%m月%d日")
@@ -1870,6 +1948,7 @@ if not st.session_state.report_ready:
                             provider=resolved_search_provider,
                             exa_key=exa_key,
                             exa_settings=resolved_search_settings,
+                            blocked_domains=manual_blocked_domains,
                         )
                         if china_mode:
                             results = filter_china_results(results, effective_domains, require_chinese_text=True)
@@ -2053,7 +2132,7 @@ if not st.session_state.report_ready:
 
     with tab3:
         st.markdown(
-            "💡 **本频道面向 FPC 制造商研发部门**：本轮固定使用 Exa 广度召回与 DeepSeek 生成，"
+            f"💡 **本频道面向 FPC 制造商研发部门**：本轮固定使用 Exa 广度召回与 OpenRouter `{model_id}` 生成，"
             "重点跟踪消费电子、AR/VR/AI眼镜、AI、电动汽车、折叠屏与新型显示、机器人/具身智能，并提高中国国内新闻权重。"
         )
         consumer_search_provider = "exa"
@@ -2118,8 +2197,11 @@ if not st.session_state.report_ready:
             search_depth=DEFAULT_CONSUMER_DAILY_SEARCH_DEPTH,
         ):
             ai, light_ai, ai_notices = build_ai_stack(
-                api_key,
+                openrouter_key,
                 model_id,
+                openrouter_base_url=openrouter_base_url,
+                openrouter_reasoning_effort=openrouter_reasoning_effort,
+                openrouter_model_info=openrouter_model_info,
                 use_gemini_light=use_gemini_light,
                 gemini_key=gemini_key,
                 gemini_model=gemini_light_model,
@@ -2127,7 +2209,7 @@ if not st.session_state.report_ready:
                 gemini_main_model=gemini_main_model,
             )
             if not ai.valid:
-                st.error("当前没有可用的主模型密钥。请配置 DEEPSEEK_API_KEY，或开启 Gemini 主模型并配置 GEMINI_API_KEY / GOOGLE_API_KEY。")
+                st.error("当前没有可用的主模型密钥。请配置 OPENROUTER_API_KEY，或开启 Gemini 主模型。")
                 return [], [], "未启用模型", {}
             if not resolved_search_provider:
                 st.error("频道三当前为 Exa-only 模式。请配置 EXA_API_KEY；本频道不再静默回退 Tavily。")
@@ -2166,6 +2248,7 @@ if not st.session_state.report_ready:
                         query_suffix=query_suffix,
                         search_depth=search_depth,
                         max_candidates=120 if search_depth == "wide" else (90 if search_depth == "normal" else 60),
+                        blocked_domains=manual_blocked_domains,
                     )
                     raw_results, freshness_stats, freshness_warnings = filter_consumer_results_by_freshness(
                         raw_results,
@@ -2226,6 +2309,7 @@ if not st.session_state.report_ready:
                             provider=resolved_search_provider,
                             exa_key=exa_key,
                             exa_settings=resolved_search_settings,
+                            blocked_domains=manual_blocked_domains,
                         )
 
                     topic_verified = build_verified_topic_events(
@@ -2305,7 +2389,7 @@ if not st.session_state.report_ready:
                         current_dt.date(),
                         topic_verified.time_window,
                     )
-                    verified_material = verified_package_to_deepseek_material(verified_package)
+                    verified_material = verified_package_to_llm_material(verified_package)
                     event_master_material = json.dumps(
                         _serialize_event_blueprints(event_blueprints),
                         ensure_ascii=False,
@@ -2516,7 +2600,7 @@ if not st.session_state.report_ready:
             f"情报数据库 `{PWG_DEFAULT_WORKBOOK_PATH}`；"
             f"日报/周报 `{PWG_DEFAULT_REPORT_DIR}`。"
         )
-        st.caption("DeepSeek 当前仅用于离线质量复核；本前端入口的采集、分类、评分和报告生成不新增大模型调用。")
+        st.caption("本前端入口的采集、分类、评分和报告生成不调用大模型；历史 DeepSeek 离线复核记录仅作为归档保留。")
 
         pwg_col1, pwg_col2, pwg_col3, pwg_col4 = st.columns(4)
         with pwg_col1:
@@ -2614,12 +2698,14 @@ if not st.session_state.report_ready:
                             output_dir=PWG_DEFAULT_RAW_DIR,
                             workbook_path=PWG_DEFAULT_WORKBOOK_PATH,
                             write_workbook=bool(pwg_write_workbook),
+                            blocked_domains=manual_blocked_domains,
                         )
                         pwg_rows = list(pwg_payload.get("classified_rows") or [])
                         pwg_daily_path = write_daily_brief(
                             pwg_rows,
                             report_date=pwg_report_date,
                             output_dir=PWG_DEFAULT_REPORT_DIR,
+                            blocked_domains=manual_blocked_domains,
                         )
                         pwg_weekly_result = write_weekly_review(
                             pwg_rows,
@@ -2627,6 +2713,7 @@ if not st.session_state.report_ready:
                             output_dir=PWG_DEFAULT_REPORT_DIR,
                             workbook_path=PWG_DEFAULT_WORKBOOK_PATH,
                             update_workbook=bool(pwg_write_workbook),
+                            blocked_domains=manual_blocked_domains,
                         )
                         st.session_state.pwg_last_run = {
                             **pwg_payload,
@@ -2649,11 +2736,15 @@ if not st.session_state.report_ready:
                     try:
                         with Path(latest_json).open("r", encoding="utf-8") as file_obj:
                             latest_payload = json.load(file_obj)
-                        pwg_rows = load_classified_rows_from_json(latest_json)
+                        pwg_rows = load_classified_rows_from_json(
+                            latest_json,
+                            blocked_domains=manual_blocked_domains,
+                        )
                         pwg_daily_path = write_daily_brief(
                             pwg_rows,
                             report_date=pwg_report_date,
                             output_dir=PWG_DEFAULT_REPORT_DIR,
+                            blocked_domains=manual_blocked_domains,
                         )
                         pwg_weekly_result = write_weekly_review(
                             pwg_rows,
@@ -2661,6 +2752,7 @@ if not st.session_state.report_ready:
                             output_dir=PWG_DEFAULT_REPORT_DIR,
                             workbook_path=PWG_DEFAULT_WORKBOOK_PATH,
                             update_workbook=bool(pwg_write_workbook),
+                            blocked_domains=manual_blocked_domains,
                         )
                         latest_xlsx = Path(latest_json).with_suffix(".xlsx")
                         st.session_state.pwg_last_run = {
@@ -2833,6 +2925,7 @@ if not st.session_state.report_ready:
                             exa_key=exa_key,
                             max_queries_per_type=int(sg_max_queries),
                             results_per_query=int(sg_results_per_query),
+                            blocked_domains=manual_blocked_domains,
                         )
                         st.session_state.strain_gauge_last_run = sg_payload
                         st.success("应变片 / 六轴力传感器专题生成完成。")
