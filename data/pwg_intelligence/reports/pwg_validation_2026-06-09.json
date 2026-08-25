@@ -1,0 +1,92 @@
+{
+  "run_at": "2026-06-09T12:01:59.595437+00:00",
+  "report_date": "2026-06-09",
+  "collector": {
+    "output_json": "E:\\Users\\zwz10\\PycharmProjects\\collectNews\\collectNews-main\\data\\pwg_intelligence\\raw\\daily_scan_2026-06-09.json",
+    "output_xlsx": "E:\\Users\\zwz10\\PycharmProjects\\collectNews\\collectNews-main\\data\\pwg_intelligence\\raw\\daily_scan_2026-06-09.xlsx",
+    "output_workbook": "E:\\Users\\zwz10\\PycharmProjects\\collectNews\\collectNews-main\\data\\pwg_intelligence\\pwg_intelligence.xlsx",
+    "query_count": 10,
+    "raw_result_count": 60,
+    "kept_count": 35,
+    "classified_count": 33,
+    "filter_stats": {
+      "input_count": 60,
+      "kept_count": 35,
+      "dropped_missing_core_fields_count": 0,
+      "dropped_missing_timestamp_count": 0,
+      "dropped_time_window_count": 1,
+      "dropped_irrelevant_count": 5,
+      "dropped_duplicate_url_count": 12,
+      "dropped_duplicate_title_count": 1,
+      "dropped_duplicate_domain_count": 6
+    },
+    "rule_coverage": {
+      "input_count": 35,
+      "assessed_count": 35,
+      "kept_count": 33,
+      "dropped_low_trust_count": 2,
+      "low_trust_fallback_used": false,
+      "manual_review_count": 27,
+      "classification_rule_coverage": 1.0,
+      "source_level_rule_coverage": 1.0,
+      "maturity_rule_coverage": 1.0,
+      "scoring_rule_coverage": 1.0,
+      "category_counts": {
+        "automotive": 3,
+        "company_update": 16,
+        "paper": 4,
+        "cpo_datacenter": 2,
+        "exhibition": 1,
+        "connector": 6,
+        "standard": 1
+      },
+      "source_level_counts": {
+        "C": 27,
+        "A": 6
+      },
+      "maturity_counts": {
+        "M6": 8,
+        "M0": 16,
+        "M1": 5,
+        "M7": 3,
+        "M5": 1
+      }
+    },
+    "manual_review_count": 27
+  },
+  "reports": {
+    "daily_path": "E:\\Users\\zwz10\\PycharmProjects\\collectNews\\collectNews-main\\data\\pwg_intelligence\\reports\\PWG_daily_brief_2026-06-09.md",
+    "weekly_path": "E:\\Users\\zwz10\\PycharmProjects\\collectNews\\collectNews-main\\data\\pwg_intelligence\\reports\\PWG_weekly_review_2026-W24.md",
+    "weekly_opportunity_count": 1
+  },
+  "deepseek_review": {
+    "overall_quality": "usable",
+    "critical_issues": [
+      "日报中仅1条线索，且该线索在周报中重复出现多次，导致周报内容冗余",
+      "周报中多条线索的FPC关系描述不准确或牵强，如学术论文被归类为竞品动作",
+      "部分线索事实摘要不完整，如Hakusan产品页摘要被截断",
+      "周报中‘仍然缺少的证据’部分过于笼统，未具体说明需要哪些证据"
+    ],
+    "improvement_actions": [
+      "日报应确保每日至少3-5条高价值新增线索，避免单条重复",
+      "周报中同一线索不应在多个分类下重复出现，应合并或去重",
+      "每条线索的FPC关系应基于事实明确关联，避免泛泛而谈",
+      "补充原文链接的完整摘要，确保事实摘要可读",
+      "‘仍然缺少的证据’应具体化，如‘缺少车载PWG应用的具体案例或厂商动态’"
+    ],
+    "drop_or_keep_judgement": "keep",
+    "report_specific_feedback": {
+      "daily": [
+        "日报仅1条线索，价值较低，建议增加检索范围或调整关键词",
+        "线索事实摘要不完整，应提取完整的产品列表或关键信息"
+      ],
+      "weekly": [
+        "周报中Hakusan线索重复出现4次，应合并为一条并在相关分类中引用",
+        "学术论文被归类为竞品动作不恰当，应归入技术路线或学术进展",
+        "OIF项目线索的FPC关系描述‘可能影响’过于模糊，需明确具体影响",
+        "Largan线索来源等级为C，但内容为新闻，应核实可靠性",
+        "‘仍然缺少的证据’部分应列出具体缺失的证据类型，如‘缺少车载PWG的供应链合作案例’"
+      ]
+    }
+  }
+}

@@ -1,0 +1,175 @@
+version: 1
+description: "PWG company watchlist. Edit companies, aliases, roles and watch terms directly."
+
+company_groups:
+  global_pwg_materials_and_connectors:
+    title: "海外PWG材料、接口与连接器"
+    companies:
+      - name: "Hakusan"
+        aliases: ["Hakusan", "白山", "Hakusan PMT"]
+        region: "Japan"
+        roles: ["PMT connector", "optical wiring board", "polymer waveguide interface"]
+        priority: "P1"
+        watch_terms: ["PMT connector", "polymer optical waveguide", "optical wiring board"]
+      - name: "Sumitomo Bakelite"
+        aliases: ["Sumitomo Bakelite", "住友电木", "住友ベークライト"]
+        region: "Japan"
+        roles: ["polymer material", "photocurable polymer", "waveguide material"]
+        priority: "P1"
+        watch_terms: ["photocurable polymer", "siloxane waveguide", "polymer optical waveguide"]
+      - name: "Sumitomo Electric"
+        aliases: ["Sumitomo Electric", "住友电工", "住友電気工業"]
+        region: "Japan"
+        roles: ["optical connector", "fiber array", "automotive optical harness"]
+        priority: "P1"
+        watch_terms: ["automotive optical harness", "optical connector", "fiber array"]
+      - name: "Yazaki"
+        aliases: ["Yazaki", "矢崎", "矢崎総業"]
+        region: "Japan"
+        roles: ["automotive harness", "vehicle connector", "optical harness"]
+        priority: "P1"
+        watch_terms: ["automotive optical harness", "ECU optical connector", "zonal controller"]
+      - name: "Molex"
+        aliases: ["Molex", "莫仕"]
+        region: "US"
+        roles: ["connector", "fiber optic connector", "data center interconnect"]
+        priority: "P1"
+        watch_terms: ["MPO", "MT ferrule", "board edge connector", "optical header"]
+      - name: "Amphenol"
+        aliases: ["Amphenol", "安费诺"]
+        region: "US"
+        roles: ["connector", "automotive connector", "high speed interconnect"]
+        priority: "P1"
+        watch_terms: ["automotive optical ethernet", "optical connector", "MPO"]
+      - name: "TE Connectivity"
+        aliases: ["TE Connectivity", "TE", "泰科电子"]
+        region: "US/Switzerland"
+        roles: ["automotive connector", "board connector", "fiber optic connector"]
+        priority: "P1"
+        watch_terms: ["board edge connector", "automotive optical ethernet", "ECU optical connector"]
+      - name: "Aptiv"
+        aliases: ["Aptiv", "安波福"]
+        region: "Ireland/US"
+        roles: ["automotive architecture", "zonal controller", "vehicle harness"]
+        priority: "P2"
+        watch_terms: ["zonal controller", "automotive optical ethernet", "optical harness"]
+      - name: "Leoni"
+        aliases: ["Leoni", "莱尼"]
+        region: "Germany"
+        roles: ["automotive harness", "cable system", "vehicle network"]
+        priority: "P2"
+        watch_terms: ["automotive optical harness", "optical branching connector"]
+
+  datacenter_cpo:
+    title: "数据中心、CPO与高速互连"
+    companies:
+      - name: "Broadcom"
+        aliases: ["Broadcom", "博通"]
+        region: "US"
+        roles: ["CPO", "optical engine", "switch silicon"]
+        priority: "P1"
+        watch_terms: ["CPO", "optical engine", "external laser source", "PIC coupling"]
+      - name: "Marvell"
+        aliases: ["Marvell", "美满", "迈威尔"]
+        region: "US"
+        roles: ["DSP", "optical interconnect", "data center silicon"]
+        priority: "P1"
+        watch_terms: ["CPO", "OBO", "optical engine", "PIC coupling"]
+      - name: "Coherent"
+        aliases: ["Coherent", "高意"]
+        region: "US"
+        roles: ["laser", "optical component", "transceiver"]
+        priority: "P2"
+        watch_terms: ["external laser source", "optical engine", "PIC coupling"]
+      - name: "Lumentum"
+        aliases: ["Lumentum"]
+        region: "US"
+        roles: ["laser", "datacom optics"]
+        priority: "P2"
+        watch_terms: ["external laser source", "CPO", "datacenter optics"]
+
+  china_optical_modules_and_components:
+    title: "国内光模块与光器件企业"
+    companies:
+      - name: "Zhongji Innolight"
+        aliases: ["中际旭创", "Innolight"]
+        region: "China"
+        roles: ["optical module", "800G/1.6T", "data center optics"]
+        priority: "P1"
+        watch_terms: ["CPO", "800G", "1.6T", "optical engine"]
+      - name: "Eoptolink"
+        aliases: ["新易盛", "Eoptolink"]
+        region: "China"
+        roles: ["optical module", "datacom transceiver"]
+        priority: "P1"
+        watch_terms: ["CPO", "optical engine", "data center optics"]
+      - name: "Accelink"
+        aliases: ["光迅科技", "Accelink"]
+        region: "China"
+        roles: ["optical device", "optical module", "PLC"]
+        priority: "P2"
+        watch_terms: ["optical interconnect", "optical device", "CPO"]
+      - name: "TFC Communication"
+        aliases: ["天孚通信", "TFC"]
+        region: "China"
+        roles: ["fiber array", "optical component", "coupling component"]
+        priority: "P1"
+        watch_terms: ["fiber array", "PIC coupling", "optical header"]
+      - name: "Hisense Broadband"
+        aliases: ["海信宽带", "Hisense Broadband"]
+        region: "China"
+        roles: ["optical module", "optical component"]
+        priority: "P2"
+        watch_terms: ["optical module", "CPO", "data center optics"]
+
+  china_pcb_fpc_packaging:
+    title: "国内PCB、FPC与封装企业"
+    companies:
+      - name: "Avary Holding"
+        aliases: ["鹏鼎控股", "Avary"]
+        region: "China"
+        roles: ["FPC", "PCB", "consumer electronics substrate"]
+        priority: "P1"
+        watch_terms: ["光电混合FPC", "flexible optical circuit", "optical wiring board"]
+      - name: "DSBJ"
+        aliases: ["东山精密", "DSBJ"]
+        region: "China"
+        roles: ["FPC", "precision manufacturing", "module assembly"]
+        priority: "P1"
+        watch_terms: ["光电混合FPC", "flexible polymer waveguide", "module assembly"]
+      - name: "Shennan Circuits"
+        aliases: ["深南电路", "Shennan Circuits"]
+        region: "China"
+        roles: ["PCB", "IC substrate", "high speed board"]
+        priority: "P1"
+        watch_terms: ["optical circuit board", "optical backplane", "optical interposer"]
+      - name: "WUS Printed Circuit"
+        aliases: ["沪电股份", "WUS"]
+        region: "China"
+        roles: ["PCB", "server board", "high speed interconnect"]
+        priority: "P2"
+        watch_terms: ["optical circuit board", "optical backplane", "CPO"]
+      - name: "Victory Giant Technology"
+        aliases: ["胜宏科技", "Victory Giant"]
+        region: "China"
+        roles: ["PCB", "AI server board"]
+        priority: "P2"
+        watch_terms: ["optical circuit board", "AI server", "optical backplane"]
+      - name: "JCET"
+        aliases: ["长电科技", "JCET"]
+        region: "China"
+        roles: ["semiconductor packaging", "advanced packaging"]
+        priority: "P2"
+        watch_terms: ["optical interposer", "optical RDL", "PIC coupling"]
+      - name: "Tongfu Microelectronics"
+        aliases: ["通富微电", "Tongfu"]
+        region: "China"
+        roles: ["semiconductor packaging", "advanced packaging"]
+        priority: "P2"
+        watch_terms: ["optical interposer", "optical RDL", "co-packaged optics"]
+      - name: "Huatian Technology"
+        aliases: ["华天科技", "Huatian"]
+        region: "China"
+        roles: ["semiconductor packaging", "module packaging"]
+        priority: "P3"
+        watch_terms: ["optical interposer", "optical RDL", "PIC coupling"]
