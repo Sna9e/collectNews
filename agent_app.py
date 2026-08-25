@@ -81,7 +81,12 @@ from tools.search_engine import (
     text_mentions_local_day,
     verify_selected_news_by_title_search,
 )
-from tools.source_blocklist import get_builtin_block_rules, parse_manual_blocklist
+from tools.source_blocklist import (
+    get_builtin_block_rules,
+    load_user_source_blocklist,
+    parse_manual_blocklist,
+    save_user_source_blocklist,
+)
 from pwg_intelligence.collector import (
     DEFAULT_RAW_DIR as PWG_DEFAULT_RAW_DIR,
     collect_pwg_daily_scan,
@@ -524,7 +529,8 @@ def format_freshness_stats(stats):
         f"时效审查：保留 {int(stats.get('kept_count', 0) or 0)}/{int(stats.get('input_count', 0) or 0)} 条，"
         f"剔除超窗 {int(stats.get('dropped_stale_count', 0) or 0)} 条、"
         f"缺时间戳 {int(stats.get('dropped_missing_timestamp_count', 0) or 0)} 条、"
-        f"时间异常 {int(stats.get('dropped_future_count', 0) or 0)} 条"
+        f"时间异常 {int(stats.get('dropped_future_count', 0) or 0)} 条、"
+        f"时间证据冲突 {int(stats.get('date_conflict_count', 0) or 0)} 条"
     )
 
 
@@ -537,6 +543,8 @@ def audit_results_for_freshness(raw_results, time_flag, current_dt):
         max_age_hours=30,
         future_tolerance_hours=6,
         enabled=enabled,
+        verify_page_dates=enabled,
+        max_page_checks=EVENT_BLUEPRINT_INPUT_LIMIT_COMPANY,
     )
 
 
@@ -1277,6 +1285,13 @@ with st.sidebar:
     configured_blocked_domains = _get_runtime_secret("NEWS_BLOCKED_DOMAINS", "")
     if "manual_blocked_domains_text" not in st.session_state:
         st.session_state.manual_blocked_domains_text = configured_blocked_domains
+    if "persistent_blocked_domains" not in st.session_state:
+        persistent_policy = load_user_source_blocklist(gh_token, gist_id)
+        st.session_state.persistent_blocked_domains = list(persistent_policy.get("domains", []))
+        st.session_state.persistent_blocked_domains_text = "\n".join(
+            st.session_state.persistent_blocked_domains
+        )
+        st.session_state.persistent_blocklist_load_info = persistent_policy
     requested_consumer_provider_config = normalize_search_provider(
         _get_runtime_secret("CONSUMER_DAILY_SEARCH_PROVIDER", DEFAULT_CONSUMER_DAILY_SEARCH_PROVIDER)
     )
@@ -1399,19 +1414,74 @@ with st.sidebar:
         builtin_block_rules = get_builtin_block_rules()
         st.caption(
             f"内置 {len(builtin_block_rules)} 条域名规则，并检测明确的机器人/AI 自动生成声明。"
-            "手动规则对当前五个频道和标题二次搜索同时生效。"
+            "永久与临时规则对当前五个频道和标题二次搜索同时生效。"
         )
+        persistent_blocked_domains_text = st.text_area(
+            "永久屏蔽网站",
+            key="persistent_blocked_domains_text",
+            height=140,
+            placeholder="每行一个域名或完整 URL，例如：\nbitrss.com\nhttps://robot.example.org/news/123",
+            help="删除或增加域名后点击“保存永久名单”。配置 Gist 时会同步到 Gist，否则保存在当前服务器本地文件。",
+        )
+        persistent_input_domains, invalid_persistent_tokens = parse_manual_blocklist(
+            persistent_blocked_domains_text
+        )
+        if st.button("保存永久名单", key="save_persistent_source_blocklist"):
+            save_result = save_user_source_blocklist(
+                persistent_input_domains,
+                github_token=gh_token,
+                gist_id=gist_id,
+            )
+            if save_result.get("local_saved"):
+                st.session_state.persistent_blocked_domains = list(save_result.get("domains", []))
+            st.session_state.persistent_blocklist_load_info = {
+                "domains": list(save_result.get("domains", [])),
+                "source": (
+                    "gist" if save_result.get("remote_saved")
+                    else ("local" if save_result.get("local_saved") else "empty")
+                ),
+                "local_path": save_result.get("local_path", "data/source_blocklist.user.json"),
+                "remote_configured": bool(save_result.get("remote_configured")),
+                "warnings": list(save_result.get("warnings", [])),
+            }
+            if save_result.get("remote_configured") and save_result.get("remote_saved"):
+                st.success(f"永久名单已保存并同步到 Gist，共 {len(save_result.get('domains', []))} 个域名。")
+            elif save_result.get("local_saved"):
+                st.success(f"永久名单已保存到当前服务器，共 {len(save_result.get('domains', []))} 个域名。")
+            else:
+                st.error("永久名单未能保存，请检查服务器目录写权限。")
+        persistent_blocked_domains = list(st.session_state.get("persistent_blocked_domains", []))
+        load_info = dict(st.session_state.get("persistent_blocklist_load_info", {}) or {})
+        if load_info.get("source") == "gist":
+            st.caption(f"已从 Gist 加载 {len(persistent_blocked_domains)} 个永久域名，并建立本地镜像。")
+        else:
+            st.caption(
+                f"当前已保存 {len(persistent_blocked_domains)} 个永久域名；"
+                f"存储文件：{load_info.get('local_path', 'data/source_blocklist.user.json')}"
+            )
+        for warning in load_info.get("warnings", []):
+            st.warning(warning)
+        if invalid_persistent_tokens:
+            invalid_preview = "、".join(invalid_persistent_tokens[:5])
+            st.warning(f"永久名单中以下输入不是有效域名，保存时会忽略：{invalid_preview}")
+
         manual_blocked_domains_text = st.text_area(
-            "手动屏蔽网站",
+            "本次运行临时屏蔽网站",
             key="manual_blocked_domains_text",
-            height=120,
+            height=100,
             placeholder="每行一个域名或完整 URL，例如：\nspam.example.com\nhttps://robot.example.org/news/123",
-            help="支持换行、逗号或分号分隔；屏蔽域名会同时覆盖其全部子域名。",
+            help="只在当前 Streamlit 会话中有效；支持换行、逗号或分号分隔，并覆盖子域名。",
         )
-        manual_blocked_domains, invalid_blocked_domain_tokens = parse_manual_blocklist(
+        temporary_blocked_domains, invalid_blocked_domain_tokens = parse_manual_blocklist(
             manual_blocked_domains_text
         )
-        st.caption(f"当前手动屏蔽 {len(manual_blocked_domains)} 个域名。")
+        manual_blocked_domains = list(
+            dict.fromkeys(persistent_blocked_domains + temporary_blocked_domains)
+        )
+        st.caption(
+            f"当前运行共启用 {len(manual_blocked_domains)} 个自定义域名："
+            f"永久 {len(persistent_blocked_domains)} 个，临时 {len(temporary_blocked_domains)} 个。"
+        )
         if invalid_blocked_domain_tokens:
             invalid_preview = "、".join(invalid_blocked_domain_tokens[:5])
             st.warning(f"以下输入不是有效域名，已忽略：{invalid_preview}")

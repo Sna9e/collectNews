@@ -1,5 +1,22 @@
 # PLANS.md
 
+## 2026-08-24：永久信息源屏蔽、发布时间复核与金融链可靠性
+
+- [x] 将前端信息源屏蔽拆分为“永久名单”和“本次运行临时名单”；永久名单支持直接增删后保存。
+- [x] 永久名单采用 `data/source_blocklist.user.json` 原子写入，并在已配置 `GITHUB_TOKEN + GIST_ID` 时同步独立 Gist 文件；新 Streamlit 会话会自动恢复并建立本地镜像。
+- [x] 将 `bitrss.com`、`dev.to`、`vocus.cc`、`jethrojeff.com` 加入内置硬屏蔽规则，搜索请求预排除和返回结果本地复检同时生效。
+- [x] 增加发布时间多证据解析：网页 JSON-LD、`article:published_time` 等 meta、带标签的发布时间、URL 日期路径和供应商时间戳。
+- [x] 时间证据冲突时优先采用网页/URL 原始证据；频道一过去 24 小时初筛对前 18 条候选并发抓取公开页面日期，最终标题二次审查继续复核。
+- [x] 新增时间审查诊断：网页检查数、页面日期提取数、时间证据冲突数、仅供应商时间戳数及因冲突被剔除数。
+- [x] 新增 `tools/finance_registry.json`，将公司上市状态、代码、交易所、币种和别名从 Python 硬编码迁出。
+- [x] 将 SpaceX 登记为 `NASDAQ: SPCX`；OpenAI、Anthropic 保留为 `pending_listing`，正式代码未获交易所/监管确认前禁止模型猜测。
+- [x] 金融行情链改为市场自适应多源：美股 `Yahoo Chart → Stooq → Tencent → yfinance`，A/H 股优先 Tencent；移除依赖 Cookie 的雪球运行路径。
+- [x] 增加有限重试、15 分钟缓存、OHLCV 统一校验、供应商尝试诊断，以及 `mplfinance` 失败时的 Matplotlib 图表降级。
+- [x] 修复 Yahoo `chartPreviousClose` 被误作上一交易日收盘价的问题；缺少 `previousClose` 时从日线倒数第二条严格计算日涨跌幅。
+- [x] 真实公开行情验证：`SPCX` 由 `yahoo_chart` 返回 23 个交易日并生成有效 K 线图；金融 stub PPT 成功嵌入图片，渲染检查无越界。
+- [x] 完成全量回归：16 个测试脚本、113 个测试函数全部通过，相关模块 `py_compile` 通过。
+- [ ] 更新 Streamlit Secrets 中失效的 GitHub Gist 凭据；当前本地永久名单有效，但本机实测 Gist 同步返回 HTTP 401，云端跨重启持久化需凭据恢复后再确认。
+
 ## 频道一：参考 News-main_0818 的短新闻、长新闻对应与重点高亮优化
 
 - [x] 只读扫描 `E:\Users\zwz10\PycharmProjects\News-main_0818\News-main` 全部文件，并对 24 个 Python 文件完成 AST/函数/类级静态审查；参考仓库与当前仓库的频道一核心文件经哈希比较没有可直接搬运的差异。
@@ -33,7 +50,7 @@
 - [x] 增加机器人/AI 自动生成及 RSS 自动聚合强标记过滤。
 - [x] Exa 使用 `excludeDomains`、Tavily 使用 `exclude_domains` 做请求前排除，并对所有返回结果执行本地二次门禁。
 - [x] 增加可审计诊断：拦截总数、域名、类别、原因和标题样本。
-- [x] Streamlit 侧栏增加手动屏蔽网站输入、内置名单预览和无效域名提示；规则覆盖当前五个频道及频道一标题二次搜索。
+- [x] Streamlit 侧栏增加永久/临时屏蔽网站输入、保存状态、内置名单预览和无效域名提示；规则覆盖当前五个频道及频道一标题二次搜索。
 - [x] 支持 `NEWS_BLOCKED_DOMAINS` 持久设置和环境变量，`setup_api_keys.py` 可写入配置。
 - [x] 增加专项测试并完成相关频道回归与前端浏览器检查。
 - [ ] 根据实际运行诊断定期复核内置名单；只有站点整体属于自动聚合或低可信转载入口时才升级为永久硬屏蔽。

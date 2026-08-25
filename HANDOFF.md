@@ -1,5 +1,63 @@
 # HANDOFF.md
 
+## 0R. 2026-08-24 更新：永久信息源屏蔽、发布时间复核与 SpaceX 金融链
+
+### 范围与根因
+
+- 本次修改仓库为 `E:\Users\zwz10\PycharmProjects\collectNews\collectNews-main`。未改变频道二、频道三、PWG、应变片专题的数据模型，也未改变 OpenRouter、Exa、Tavily 的选择逻辑或 PPT 模板。
+- 原前端“手动屏蔽网站”只存在 Streamlit `session_state` 中，页面新会话后丢失；内置名单未包含 `bitrss.com`、`dev.to`、`vocus.cc`、`jethrojeff.com`。
+- 原时效审查只取第一个搜索供应商时间字段。旧文章被聚合站重新发布、供应商错误赋予当前时间或 URL 自带旧日期时，缺少独立证据推翻错误时间戳。
+- 原金融链在 Python 中硬编码公司名，SpaceX 未登记，OpenAI/Anthropic 与“未知公司”没有明确状态边界；腾讯、雪球、`yfinance.info` 任一接口不稳定时容易没有历史数据和图表。
+
+### 信息源屏蔽
+
+- `tools/source_blocklist.json` 升级为版本 2，内置 27 个域名；新增的四个用户确认低可信站点同时进入供应商排除参数和本地二次门禁。
+- `tools/source_blocklist.py` 新增用户永久名单读写。默认本地路径为 `data/source_blocklist.user.json`，采用临时文件 + `os.replace` 原子写入；配置 `GITHUB_TOKEN` 和 `GIST_ID` 时，再同步到同一 Gist 中独立的 `source_blocklist.user.json` 文件。
+- Gist 加载成功后会写本地镜像；Gist 不可用时继续使用本地副本并在页面明确告警。命令行入口也会自动读取本地永久名单。
+- `agent_app.py` 的侧栏现在分别提供“永久屏蔽网站”和“本次运行临时屏蔽网站”。删除/增加永久域名后必须点击“保存永久名单”；页面显示本地/Gist 保存结果、无效输入和当前有效数量。
+- 浏览器验证已将四个域名保存到本地永久名单；新建 Streamlit 会话后自动恢复 4 个域名，五个频道和频道一标题复搜共用同一有效名单。
+
+### 发布时间复核
+
+- `tools/search_engine.py` 保留供应商原始时间为 `provider_published_date`，并新增网页 JSON-LD `datePublished`、发布 meta、带 `Published/发布日期/发布时间` 标签的正文头部和 URL 日期路径解析。
+- 证据优先级为：实时抓取页面日期 → 原始内容 JSON-LD/meta → 页面级字段 → URL 日期路径 → 带标签正文日期 → 供应商时间戳。证据相差超过 48 小时会标记冲突。
+- 频道一过去 24 小时初筛会对排序后的前 18 条候选并发读取公开页面元数据；最终详细新闻标题二次搜索也会再次执行页面日期复核。请求仅访问公开 HTTP/HTTPS 页面，限制读取 400 KB、8 秒超时和最多 6 个并发，不处理本地/私有地址，不绕过登录、验证码或访问控制。
+- 解析后的结果新增 `publication_date_confidence`、`publication_date_conflict`、`publication_date_evidence`；统计新增页面检查数、页面日期提取数、冲突数、仅供应商时间戳数和冲突剔除数。旧 URL 日期或页面日期能够推翻错误的“今日”时间戳并进入现有 warnings。
+- 频道三仍不新增实时页面抓取调用，只复用结果内已有的页面/URL证据，避免改变当日广度检索性能。
+
+### 金融数据与图表
+
+- 新增 `tools/finance_registry.json`。SpaceX 已按 SEC/Nasdaq 官方材料登记为 `SPCX`、`NASDAQ`、`USD`，上市日为 2026-06-12；OpenAI 和 Anthropic 保留为 `pending_listing`，在正式代码确认前不会调用模型猜测股票代码。
+- `tools/finance_engine.py` 改为配置化证券解析。未来 OpenAI/Anthropic 上市只需在注册表中将 `status` 改为 `listed` 并填写已核验的 `ticker/exchange/currency/listed_date/verification_source`。
+- 美股数据源顺序为 `Yahoo Chart JSON → Stooq CSV → Tencent → yfinance history/fast_info`；A/H 股顺序为 `Tencent → Yahoo Chart → Stooq → yfinance`。已移除需要首页 Cookie 的雪球运行路径。
+- 公共行情请求增加有限重试、超时、统一请求头和 15 分钟内存缓存；每次返回保留 `provider_attempts`、耗时、命中源、历史点数和 `as_of`。所有 OHLCV 在画图前执行数值化、日期排序、去重和空值检查。
+- K 线默认写入 `data/cache/finance_charts/`。`mplfinance` 不可用或失败时，自动生成收盘价 + 成交量 Matplotlib 图，不再静默返回空图。
+- Yahoo `chartPreviousClose` 是所选区间之前的收盘价，不能用于日涨跌。本次已改为使用真正的 `previousClose`，缺失时使用历史日线倒数第二个收盘价；该修复来自真实 PPT 图片复核。
+
+### 修改文件
+
+- 修改：`.gitignore`、`agent_app.py`、`tools/source_blocklist.py`、`tools/source_blocklist.json`、`tools/search_engine.py`、`tools/finance_engine.py`、`tests/test_source_blocklist.py`、`docs/SOURCE_BLOCKLIST_GUIDE_CN.md`、`README.md`、`PLANS.md`、`HANDOFF.md`。
+- 新增：`tools/finance_registry.json`、`tests/test_publication_date_validation.py`、`tests/test_finance_engine.py`、`docs/FINANCE_ENGINE_GUIDE_CN.md`。
+- 运行生成：`data/source_blocklist.user.json`（当前四个永久域名）、`data/cache/finance_charts/kline_SPCX.png`、`validation_outputs/finance_spcx_public_smoke.pptx` 及其渲染图片目录。
+
+### 验证
+
+- `python tests/test_source_blocklist.py`：9 项通过，含本地 + fake Gist 双写、远端恢复、前端静态接线和四个内置域名。
+- `python tests/test_publication_date_validation.py`：5 项通过，含旧 URL 推翻今日时间、JSON-LD、实时页面证据冲突、缺失/未来时间和正文历史日期误判保护。
+- `python tests/test_finance_engine.py`：5 项通过，含 SpaceX 注册、OpenAI/Anthropic 待上市、Yahoo 归一化、数据源降级、缓存和 Matplotlib 图表降级。
+- 全量 `tests/test_*.py`：16 个测试脚本、113 个测试函数全部通过。
+- 真实公开行情：`SPCX` 由 `yahoo_chart` 首次请求成功，返回 23 个交易日；本次读取价 136.97 USD、上一交易日收盘 134.00 USD、日变动 2.22%，行情值会随市场变化。
+- 图表：`data/cache/finance_charts/kline_SPCX.png` 为 38,982 字节；已人工检查蜡烛、均线、成交量和坐标轴。
+- PPT：`validation_outputs/finance_spcx_public_smoke.pptx` 共 4 页，第 3 页存在 SpaceX `(SPCX)` 金融标题和 1 张行情图片；`slides_test.py` 报告 `Test passed. No overflow detected.`，渲染图片已人工检查。
+- Streamlit：本地运行于 `http://127.0.0.1:8506/`；浏览器确认永久/临时控件、保存状态、四域名新会话恢复和十主题默认输入正常，未发现设置区域重叠。
+
+### 未验证与风险
+
+- 当前本机 Secrets 中的 Gist 凭据返回 HTTP 401。永久名单已保存在本地并可跨页面会话恢复，但 Streamlit Cloud 文件系统可能随实例重建而丢失；更新有 Gist 写权限的 token 后必须再次验证云端跨重启恢复。文档和日志未写入任何 token 值。
+- Nasdaq 与 Anthropic 页面在本机公开直连日期探测中没有返回可解析日期，可能是拒绝自动访问或页面未暴露标准 meta。系统会继续使用供应商 raw content、URL 日期和供应商时间，并标记证据置信度；不会绕过访问控制。
+- Yahoo、Stooq、Tencent 和 `yfinance` 均不提供本项目可依赖的服务等级承诺。多源降级显著降低空图概率，但不能保证所有市场、停牌证券或刚上市首日都有数据。
+- 本次没有调用 Exa、Tavily 或 OpenRouter 完整生成日报，不能把日期规则测试和真实 `SPCX` 行情验证视为十主题真实新闻端到端验证。
+
 ## 0Q. 2026-08-18 更新：频道一参考仓库优化
 
 ### 范围与参考结论
