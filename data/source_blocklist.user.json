@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "updated_at": "2026-08-24T09:19:42.062729+00:00",
+  "blocked_domains": [
+    "bitrss.com",
+    "dev.to",
+    "vocus.cc",
+    "jethrojeff.com"
+  ]
+}
