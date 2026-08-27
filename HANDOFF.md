@@ -1,5 +1,63 @@
 # HANDOFF.md
 
+## 0S. 2026-08-26 更新：垃圾源硬屏蔽与非频道一链路调试
+
+### 范围与边界
+
+- 本次修改仓库为 `E:\Users\zwz10\PycharmProjects\collectNews\collectNews-main`。
+- 频道一的主题、摘要、短长新闻关联、金融补链、PPT/Word 结构和模型流程没有改动；频道一只继承用户明确要求的全局域名硬屏蔽。
+- 重点调试频道二、频道三、频道四 PWG 和频道五应变片专题。真实烟测只调用本地 Exa，没有调用 Tavily，也没有模型调用。
+
+### 来源屏蔽
+
+- `tools/source_blocklist.json` 升级为版本 4，共 33 条内置规则。除用户指定的 `bitrss.com`、`dev.to`、`vocus.cc`、`jethrojeff.com`、`36kr.com`、`thevergetoday.pages.dev` 外，真实频道三输出又确认并屏蔽 `ditrowatch.com`、`collector.com.tr`、`0405.net`、`alto.gab.com`。
+- 域名归一化会删除 `www.`，并覆盖真实子域名；供应商请求前排除和返回结果本地二次检查同时生效。
+- 36Kr 已从 `search_engine.py`、`source_registry.json`、`intelligence_packs.py` 和频道三 query pack 的重点来源中删除。`consumer_daily_validation.py` 中保留的 36Kr 字样仅识别转载和旧数据，不能让 36Kr 重新进入正式结果。
+- 前端原有“永久屏蔽网站”和“本次运行临时屏蔽网站”继续有效。历史 raw JSON/Markdown 不会被自动重写，新运行和从 raw 重建报告时才应用当前名单。
+
+### 频道三
+
+- 前端固定五类：消费电子/手机与新型显示、智能眼镜、智能汽车、AI、机器人。底层第六个折叠屏 pack 仍保留给兼容调用，但频道三不再单独运行它。
+- 时间窗口只允许 24 小时或 7 天；查询上限为 6/10/16。代码默认 `normal=10`，本机 Secrets 仍配置 `wide`，因此前端会尊重本机显式设置并默认 16。
+- 默认流程为 `Topic Pack → Exa → 发布时间审查 → 去重聚类 → 多源验证 → 确定性中文简报`，不需要 OpenRouter；模型增强是可选开关，缺 Key 时自动关闭。
+- 每专题会对排序靠前的 8 个公开页面读取原始发布时间。页面/URL 证据优先于供应商时间，7 天窗口标签已修正，不再误显示“最近24小时”。
+- 正式新闻必须具有中国公司或中国市场事实；`.cn` 域名、中文页面或国内媒体转述本身不构成国内事件证据。已登记消费电子、AI、汽车、显示和机器人专业媒体会按可信来源计分，未知镜像不贡献正式多源证据。
+- 页面日期可信度已从搜索结果透传到候选事件。单篇新闻只有同时满足“已登记官方/专业来源、页面日期已核验、主体/动作/对象完整、具有国内事实、无传闻/超窗原因”时才能进入 `likely`。
+- 事件聚类不再因“AI眼镜、机器人、手机”等通用专题词合并；需要公司/产品实体和足够标题或技术细节重合，避免短标题、摘要和链接错配。
+- 摘要删除记者、发布时间、图片署名、网页省略号和导航噪声；英文标题使用已验证中文事实句生成短标题。未来发布会日期不会覆盖已经发生的公告/报道日期。
+- 发布日历、前瞻、集中亮相、新品大战等汇总稿直接剔除；无官方证据时，多家媒体重复同一传闻仍只算 rumor/观察项。
+- 最终五专题真实轻量运行：Exa 成功 90 次、失败 0 次、返回 564 条。33 条硬屏蔽已生效，正式输出不再出现 `0405.net`/45看点、自动翻译镜像、纯海外 Meta/Perplexity 事件或跨事件摘要；五专题均为 0 条正式新闻并显示不足原因，没有低质补齐。
+- `consumer_phone` 诊断运行：6 个 query、36 条 raw、33 条通过时效审查；抽查 12 个页面并全部提取到日期。高位结果主要来自新浪聚合、网易订阅或未知站；唯一已登记 CNMO 候选为“或将”类消息且专题事实不足，因此正式新闻仍为 0。当前真实瓶颈是权威来源召回率，不是验证流程故障。
+
+### 其他频道
+
+- 频道二：搜索层真实 Exa 查询返回 3 条带发布时间结果。报告生成仍依赖 OpenRouter；本机 `OPENROUTER_API_KEY` 缺失时页面现在直接告警并禁用两个生成按钮。
+- PWG：修复 CLI 未读取 `.streamlit/secrets.toml` 和 Windows GBK 输出崩溃。10-query 真实运行得到 raw 40、过滤后 14、分类 13；全部为 C 级且进入人工复核，规则覆盖率为 100%。日报和周报均成功生成，周报机会数为 0。
+- 应变片专题：专利使用 365/1095 天、论文使用 1095/1825 天的 Exa 显式起止日期；不再把长窗口错误映射成 30 天。轻量真实运行 raw 为新闻 6、专利 12、论文 12，最终新闻 2、专利 0、论文 1，数量门禁正确失败并保留不足说明。
+
+### 修改文件
+
+- 业务代码：`agent_app.py`、`tools/source_blocklist.json`、`tools/search_engine.py`、`tools/source_registry.json`、`tools/intelligence_packs.py`、`tools/consumer_topic_query_packs.py`、`tools/consumer_daily_validation.py`、`tools/export_ppt.py`、`pwg_intelligence/collector.py`、`strain_gauge_intelligence/collector.py`。
+- 测试：`tests/test_source_blocklist.py`、`tests/test_consumer_daily_validation.py`、`tests/test_consumer_daily_exa_breadth.py`、`tests/test_consumer_daily_channel1_pipeline.py`、`tests/test_pwg_collector.py`、`tests/test_strain_gauge_module.py`。
+- 文档：`docs/SOURCE_BLOCKLIST_GUIDE_CN.md`、`docs/PWG_INTELLIGENCE_GUIDE_CN.md`、`docs/STRAIN_GAUGE_SENSOR_MODULE_GUIDE_CN.md`、`PLANS.md`、`HANDOFF.md`。
+
+### 验证输出
+
+- PWG raw：`validation_outputs/channel_debug/pwg_full/daily_scan_2026-08-26.json`、同名 `.xlsx`。
+- PWG 报告：`validation_outputs/channel_debug/pwg_full/reports/PWG_daily_brief_2026-08-26.md`、`PWG_weekly_review_2026-W35.md`。
+- 应变片：`validation_outputs/channel_debug/strain/raw/strain_gauge_module_2026-08-26.json`、同名 `.xlsx`，以及 `validation_outputs/channel_debug/strain/reports/strain_gauge_force_sensor_report_2026-08-26.md`。
+- 十个本轮重点屏蔽域名在上述新验证输出中均未出现。
+- `python -m compileall -q .`：通过。
+- 全量 `tests/test_*.py`：16 个脚本、126 个测试函数全部通过；包括频道一 PPT/时间线/标题门禁回归。
+
+### 未完成与风险
+
+- 本机没有活动 `OPENROUTER_API_KEY`，频道二和频道一的真实模型报告未运行；DeepSeek Key 即使存在也处于禁用状态，不能作为回退。
+- 频道三五专题真实轻量运行已经完成。严格规则产生了空专题，这是本轮搜索结果质量下的预期行为；下一步应提高企业官网和登记专业媒体的查询命中率，不能为了页面丰满恢复预测稿、未知镜像或纯海外事件。
+- PWG 真实保留项全为 C 级且全部需人工复核，说明查询仍容易召回泛 CPO、光纤和材料页面。下一步应增加 PWG 核心术语共现门槛和 A/B 原始来源查询，不应降低评分门槛。
+- 专利普通网页搜索召回不稳定，Google Patents XHR 在本机仍可能返回 503；未绕过反自动化限制。需要稳定的专利 API 或许可数据源。
+- 本地 Secrets 中的 Gist 凭据此前返回 HTTP 401；本次没有改动凭据。永久名单本地保存有效，云端跨实例恢复仍需更新 token 后验证。
+
 ## 0R. 2026-08-24 更新：永久信息源屏蔽、发布时间复核与 SpaceX 金融链
 
 ### 范围与根因
