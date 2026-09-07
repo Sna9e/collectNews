@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "updated_at": "2026-09-04T00:00:00+00:00",
+  "blocked_domains": [
+    "bitrss.com",
+    "dev.to",
+    "vocus.cc",
+    "jethrojeff.com",
+    "36kr.com",
+    "thevergetoday.pages.dev",
+    "custommapposter.com",
+    "villadaba.com",
+    "xix.ai"
+  ]
+}

@@ -1,0 +1,132 @@
+module:
+  tech_modules:
+    - 应变片与机器人六轴力传感器
+  english_name: Strain Gauge and Robotic Six-Axis Force/Torque Sensor
+
+minimum_counts:
+  news: 2
+  patent: 3
+  paper: 3
+
+search_windows_days:
+  news: [30, 90, 180]
+  patent: [365, 1095]
+  paper: [1095, 1825]
+
+keywords:
+  chinese:
+    - 应变片
+    - 箔式应变片
+    - 薄膜应变片
+    - 柔性应变传感器
+    - 六轴力传感器
+    - 六维力传感器
+    - 六分力传感器
+    - 力/力矩传感器
+    - 机器人腕部力传感器
+    - 机器人关节力传感器
+    - 灵巧手触觉传感器
+    - 人形机器人力控
+    - 协作机器人力传感器
+    - 十字梁六维力传感器
+    - 轮辐式六维力传感器
+    - 惠斯通电桥
+    - 全桥应变测量
+    - 温度补偿
+    - 解耦算法
+    - 标定矩阵
+    - FPC应变片
+    - 柔性电路应变传感器
+  english:
+    - strain gauge
+    - foil strain gauge
+    - thin film strain gauge
+    - flexible strain sensor
+    - six-axis force sensor
+    - six-axis force/torque sensor
+    - six-dimensional force sensor
+    - multi-axis force sensor
+    - robot wrist force torque sensor
+    - robot force torque sensor
+    - robotic tactile sensor
+    - humanoid robot force sensor
+    - dexterous hand tactile sensor
+    - cross beam force sensor
+    - spoke-type force sensor
+    - Stewart platform force sensor
+    - Wheatstone bridge
+    - full bridge strain measurement
+    - temperature compensation
+    - decoupling algorithm
+    - calibration matrix
+    - FPC strain gauge
+    - flexible printed circuit strain sensor
+
+relevance_terms:
+  high:
+    - 六轴力
+    - 六维力
+    - 六分力
+    - force/torque
+    - six-axis force
+    - six-dimensional force
+    - multi-axis force
+    - robot wrist
+    - 机器人腕部
+    - 应变片
+    - strain gauge
+    - Wheatstone bridge
+    - 惠斯通电桥
+    - decoupling
+    - 解耦
+    - calibration matrix
+    - 标定矩阵
+    - elastic body
+    - 弹性体
+  medium:
+    - flexible strain sensor
+    - 柔性应变传感器
+    - tactile sensor
+    - 触觉传感器
+    - force sensor
+    - 力传感器
+    - humanoid robot
+    - 人形机器人
+    - dexterous hand
+    - 灵巧手
+    - FPC
+    - flexible printed circuit
+  low:
+    - pressure sensor
+    - load cell
+    - weighing
+    - material tensile test
+    - 普通压力传感器
+    - 称重传感器
+    - 拉伸测试
+
+query_templates:
+  news:
+    - "\"six-axis force/torque sensor\" robot strain gauge news"
+    - "\"robot wrist force torque sensor\" strain gauge product"
+    - "\"humanoid robot\" \"force sensor\" \"strain gauge\""
+    - "六轴力传感器 机器人 应变片 产品 动态"
+    - "机器人腕部力传感器 应变片 公司 量产"
+    - "{company} robot force torque sensor strain gauge"
+    - "{company} 六轴力传感器 应变片"
+  patent:
+    - "\"six-axis force sensor\" strain gauge patent"
+    - "\"force torque sensor\" Wheatstone bridge decoupling patent"
+    - "\"robot wrist\" \"force/torque sensor\" patent"
+    - "六维力传感器 应变片 专利"
+    - "六轴力传感器 弹性体 解耦 专利"
+    - "{applicant} strain gauge force torque sensor patent"
+    - "{applicant} 六轴力传感器 专利"
+  paper:
+    - "\"six-axis force/torque sensor\" strain gauge calibration paper"
+    - "\"six-dimensional force sensor\" decoupling algorithm paper"
+    - "\"flexible strain sensor\" robotic tactile sensor paper"
+    - "\"robot wrist force torque sensor\" calibration matrix"
+    - "六维力传感器 应变片 解耦 标定 论文"
+    - "柔性应变传感器 机器人 触觉 论文"
+

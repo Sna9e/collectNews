@@ -1,0 +1,152 @@
+version: 1
+description: "PWG polymer waveguide keyword matrix. Non-programmers can edit terms and query templates directly."
+
+categories:
+  core_terms:
+    title: "核心术语"
+    description: "PWG、光线路板、光配線板和柔性光波导基础检索词。"
+    terms:
+      - "polymer optical waveguide"
+      - "flexible polymer waveguide"
+      - "optical circuit board"
+      - "optical wiring board"
+      - "聚合物光波导"
+      - "柔性光波导"
+      - "光线路板"
+      - "ポリマー光導波路"
+      - "光配線板"
+
+  interface_connectors:
+    title: "接口与连接器"
+    description: "连接器、插芯、光纤阵列、耦合端口和微光学接口。"
+    terms:
+      - "PMT connector"
+      - "MPO"
+      - "MT ferrule"
+      - "fiber array"
+      - "optical header"
+      - "board edge connector"
+      - "fiber stub"
+      - "45-degree mirror"
+      - "microlens"
+
+  automotive_applications:
+    title: "车载应用"
+    description: "车载光线束、车载以太网、ECU、域控、摄像头和分支节点。"
+    terms:
+      - "automotive optical harness"
+      - "automotive optical ethernet"
+      - "IEEE 802.3cz"
+      - "OPEN Alliance TC7"
+      - "ECU optical connector"
+      - "zonal controller"
+      - "camera optical link"
+      - "optical branching connector"
+
+  datacenter_cpo:
+    title: "数据中心与CPO"
+    description: "CPO/OBO/NPO、光引擎、外置光源、光中介层、背板与 PIC 耦合。"
+    terms:
+      - "CPO"
+      - "OBO"
+      - "NPO"
+      - "optical engine"
+      - "external laser source"
+      - "optical RDL"
+      - "optical interposer"
+      - "optical backplane"
+      - "PIC coupling"
+
+  materials_processes:
+    title: "材料与工艺"
+    description: "材料体系、成型工艺、写入工艺、损耗、粗糙度和可靠性。"
+    terms:
+      - "siloxane waveguide"
+      - "photocurable polymer"
+      - "acrylate waveguide"
+      - "photolithography"
+      - "imprint"
+      - "mosquito method"
+      - "direct writing"
+      - "bending loss"
+      - "roughness loss"
+      - "reliability"
+
+placeholder_groups:
+  core:
+    - "core_terms"
+  connector:
+    - "interface_connectors"
+  automotive:
+    - "automotive_applications"
+  datacenter:
+    - "datacenter_cpo"
+  process:
+    - "materials_processes"
+  standard:
+    - "automotive_applications"
+
+mode_settings:
+  daily_scan:
+    max_queries: 42
+    variants_per_template: 4
+  weekly_deep_scan:
+    max_queries: 64
+    variants_per_template: 6
+  company_watch:
+    max_queries: 48
+    variants_per_template: 4
+  standard_watch:
+    max_queries: 32
+    variants_per_template: 5
+  patent_watch:
+    max_queries: 48
+    variants_per_template: 5
+  paper_watch:
+    max_queries: 48
+    variants_per_template: 5
+
+query_templates:
+  daily_scan:
+    - "{core} {application} latest product release"
+    - "{core} {connector} supplier update"
+    - "{automotive} {core} recent development"
+    - "{datacenter} {core} optical interconnect update"
+    - "{process} {core} reliability loss"
+    - "{company} {core} product update"
+
+  weekly_deep_scan:
+    - "{core} {application} technology roadmap"
+    - "{core} {connector} manufacturability reliability"
+    - "{automotive} {standard} {core}"
+    - "{datacenter} {process} {core}"
+    - "{company} {core} {process}"
+    - "{application_terms} {core} supplier patent standard"
+
+  company_watch:
+    - "{company} {core}"
+    - "{company} {connector} {core}"
+    - "{company} {application} optical interconnect"
+    - "{company} {process} waveguide"
+    - "{company} patent {core}"
+
+  standard_watch:
+    - "{standard} {core} standard"
+    - "{standard} optical interconnect working group"
+    - "{automotive} standard optical connector"
+    - "{application_terms} standard test method"
+    - "{connector} standard optical interface"
+
+  patent_watch:
+    - "{company} patent {core}"
+    - "{company} patent {connector}"
+    - "{core} patent {process}"
+    - "{application_terms} patent polymer waveguide"
+    - "{datacenter} patent optical interposer waveguide"
+
+  paper_watch:
+    - "{core} {process} paper"
+    - "{core} {application} IEEE Optica SPIE"
+    - "{process} waveguide reliability paper"
+    - "{datacenter} {core} optical interconnect paper"
+    - "{automotive} {core} research"
