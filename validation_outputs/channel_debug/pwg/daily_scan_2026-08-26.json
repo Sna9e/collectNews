@@ -1,0 +1,77 @@
+{
+  "mode": "daily_scan",
+  "dry_run": false,
+  "generated_at": "2026-08-26T10:48:18.340438Z",
+  "lookback_days": 7,
+  "search_provider": "exa",
+  "query_count": 2,
+  "raw_result_count": 6,
+  "kept_count": 0,
+  "classified_count": 0,
+  "filter_stats": {
+    "input_count": 6,
+    "kept_count": 0,
+    "dropped_missing_core_fields_count": 0,
+    "dropped_missing_timestamp_count": 0,
+    "dropped_time_window_count": 3,
+    "dropped_irrelevant_count": 3,
+    "dropped_duplicate_url_count": 0,
+    "dropped_duplicate_title_count": 0,
+    "dropped_duplicate_domain_count": 0
+  },
+  "rule_coverage": {
+    "input_count": 0,
+    "assessed_count": 0,
+    "kept_count": 0,
+    "dropped_low_trust_count": 0,
+    "low_trust_fallback_used": false,
+    "manual_review_count": 0,
+    "classification_rule_coverage": 0,
+    "source_level_rule_coverage": 0,
+    "maturity_rule_coverage": 0,
+    "scoring_rule_coverage": 0,
+    "category_counts": {},
+    "source_level_counts": {},
+    "maturity_counts": {}
+  },
+  "manual_review_list": [],
+  "dropped_samples": [
+    "明显无关：鸿蒙智行问界M6共光路舱内激光雷达版官宣明日开启辅助驾驶挑战|视觉|光学|双模|传感器|线激光雷达_网易订阅",
+    "明显无关：蔚来 ES9 光阶晶钻智能高清投影大灯_新浪新闻",
+    "明显无关：佑驾创新全新智驾产品获头部合资车企平台定点，配套规模达数百万套_新浪财经_新浪网",
+    "时间超窗：Optical Circuit Business Development Department | Sumitomo Bakelite Co., Ltd.",
+    "时间超窗：Vuzix ships waveguide optical interconnect kit samples for AI data centers - The Data Center Engineer",
+    "时间超窗：Vuzix Targets AI Data Centers With Waveguides - TechEdgeAI"
+  ],
+  "warnings": [
+    "原始结果已返回，但全部因时间超窗、主题不相关或重复被过滤；未用低质量线索凑数。"
+  ],
+  "queries": [
+    {
+      "query": "polymer optical waveguide 车载光线束分支节点 latest product release",
+      "mode": "daily_scan",
+      "query_type": "template_01",
+      "priority": 1,
+      "language": "zh",
+      "source_scope": "web",
+      "tags": [
+        "core:polymer optical waveguide",
+        "application:车载光线束分支节点"
+      ]
+    },
+    {
+      "query": "flexible polymer waveguide optical branching connector latest product release",
+      "mode": "daily_scan",
+      "query_type": "template_01",
+      "priority": 1,
+      "language": "en",
+      "source_scope": "web",
+      "tags": [
+        "core:flexible polymer waveguide",
+        "application:optical branching connector"
+      ]
+    }
+  ],
+  "records": [],
+  "classified_rows": []
+}

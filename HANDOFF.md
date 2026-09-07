@@ -1,5 +1,52 @@
 # HANDOFF.md
 
+## 0T. 2026-09-04 更新：永久域名扩展与金融分析增强
+
+### 范围
+
+- 修改仓库：`E:\Users\zwz10\PycharmProjects\collectNews\collectNews-main`。
+- 本次只扩展全局域名硬屏蔽和频道一金融分析内容。新闻检索主题、摘要、短长新闻关联、频道二/三、PWG、应变片专题、PPT 图表绘制函数和模板均未改变。
+
+### 永久屏蔽
+
+- 用户输入中的 `www.36kr.com` 归一化为 `36kr.com`，`www.xix.ai/?lang=en` 归一化为 `xix.ai`。
+- `tools/source_blocklist.json` 升级为版本 5、36 条规则；新增 `custommapposter.com`、`villadaba.com`、`xix.ai`，原有 6 个指定域名继续保留。
+- `data/source_blocklist.user.json` 现保存 9 个用户指定的永久域名：`bitrss.com`、`dev.to`、`vocus.cc`、`jethrojeff.com`、`36kr.com`、`thevergetoday.pages.dev`、`custommapposter.com`、`villadaba.com`、`xix.ai`。
+- 内置规则与本地永久名单同时存在：前者保证全局硬门禁，后者保证前端永久名单能直接看到和编辑这些域名。
+
+### 金融分析
+
+- `tools/finance_engine.py` 的 `generate_pro_kline_chart()` 未修改。现有 Yahoo/Stooq/Tencent/yfinance 历史行情链、缓存和图表路径保持不变。
+- 新增公开估值字段补充：Yahoo 日线成功后，先尝试 Yahoo Quote；仍缺 PE/PB 时只调用腾讯报价补字段，不重新画图。`data_source` 记录历史行情来源，`fundamentals_source` 单独记录估值来源。
+- 新增 `trailing_pe`、`forward_pe`、`price_to_book`、`earnings_yield_pct`、`ma5`、`ma20`、`return_5d_pct`、`return_20d_pct`、`range_position_52w_pct` 等原始/派生指标。
+- 新增可复现判断：`valuation_assessment`、`price_assessment`、`research_stance`、判断依据和 `risk_flags`。观点仅使用“积极观察 / 中性观察 / 谨慎观察 / 数据不足”，不生成买卖指令或目标价。
+- 原 PPT 的“股权风险溢价”依赖固定 4.2% 假设且未说明日期、币种和期限，现已从页面移除，改为 PE 可用时显示盈利收益率。兼容字段 `erp` 仍保留为未配置状态。
+- PPT 金融页增加 TTM/预期 PE、PB、盈利收益率、估值判断、股价判断、研究观点、观点依据、风险提示、行情/估值来源与免责声明；下方四类事件催化和右侧原行情图继续保留。
+
+### 验证
+
+- `python tests/test_source_blocklist.py`：10 项通过；含 9 个永久域名、`xix.ai` URL 归一化、供应商预排除和本地复检。
+- `python tests/test_finance_engine.py`：6 项通过；含 PE/PB 透传、估值/价格/观点规则、缺失估值不编造和无目标价约束。
+- `python tests/test_finance_ppt_output.py`：通过；最终 PPT 实际包含 TTM/预期 PE、PB、估值判断、股价判断、研究观点、依据、风险和免责声明，且保留原图路径。
+- 真实 AAPL 公共接口烟测：`data_source=yahoo_chart`、23 个交易日；`fundamentals_source=tencent_quote` 补到 TTM PE；生成 `data/cache/finance_charts/kline_AAPL.png`。动态价格和 PE 不写入长期文档。
+- Stub PPT：`validation_outputs/finance_analysis_stub/finance_analysis_stub.pptx`；渲染目录为同名子目录。`slides_test.py` 报告无溢出，金融页图片已人工检查。
+- `python -m compileall -q .`：通过；17 个 `tests/test_*.py` 脚本、128 个测试函数全部通过。
+- Streamlit 已在 `http://127.0.0.1:8506/` 启动并检查：侧栏显示内置 36 条规则、永久 9 个域名、临时 0 个；9 个域名完整显示。Gist 仍返回 HTTP 401，页面已明确回退到本地副本。
+
+### 修改文件
+
+- 配置：`tools/source_blocklist.json`、`data/source_blocklist.user.json`。
+- 业务：`tools/finance_engine.py`、`tools/export_ppt.py`、`agent_app.py`。
+- 测试：`tests/test_source_blocklist.py`、`tests/test_finance_engine.py`、`tests/test_finance_ppt_output.py`。
+- 文档：`docs/SOURCE_BLOCKLIST_GUIDE_CN.md`、`docs/FINANCE_ENGINE_GUIDE_CN.md`、`PLANS.md`、`HANDOFF.md`。
+
+### 风险
+
+- PE/PB 等公开估值接口没有 SLA；失败时必须显示 `N/A`，不能根据股价反推。腾讯美股报价本次能补 TTM PE，但预期 PE/PB 仍可能缺失。
+- 当前估值分档是绝对倍数观察，没有行业可比和盈利增长模型；股价判断只描述均线、近期涨跌和 52 周位置，不代表未来收益预测。
+- 金融催化仍由现有模型基于新闻生成，必须与正式财报、交易所公告和监管文件交叉核验。
+- 本地永久名单已生效；如需 Streamlit Cloud 跨实例恢复，仍需可用 Gist 凭据。当前历史记录中的 Gist 401 问题没有在本次修改凭据。
+
 ## 0S. 2026-08-26 更新：垃圾源硬屏蔽与非频道一链路调试
 
 ### 范围与边界
